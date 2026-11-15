@@ -1,0 +1,37 @@
+appId: com.strangelex.bigstreet
+productName: Big Street
+copyright: © StrangeLex
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - src/**/*
+  - package.json
+  - "!**/*.map"
+
+# Les mises à jour du launcher viennent des releases GitHub (dépôt public :
+# aucun jeton n'est nécessaire côté joueur, et aucun secret n'est embarqué).
+publish:
+  provider: github
+  owner: StrangeLex
+  repo: BigStreet
+  releaseType: release
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.png
+  artifactName: BigStreet-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false                 # l'utilisateur voit où il installe
+  perMachine: false               # installation par utilisateur : pas d'UAC
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Big Street
+  deleteAppDataOnUninstall: false
+  differentialPackage: true       # mises à jour différentielles (téléchargement réduit)

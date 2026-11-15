@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head><meta charset="utf-8">
+<style>
+  html,body{margin:0;height:100%;background:#0b0f17;color:#fff;
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden}
+  .wrap{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px}
+  .logo{font-size:30px;font-weight:800;letter-spacing:2px;
+    background:linear-gradient(135deg,#22d3ee,#ff24b6 60%,#ffe259);
+    -webkit-background-clip:text;background-clip:text;color:transparent}
+  .sub{font-size:12.5px;color:rgba(255,255,255,.55)}
+  .bar{width:230px;height:4px;border-radius:99px;background:rgba(255,255,255,.1);overflow:hidden}
+  .bar i{display:block;height:100%;width:40%;border-radius:99px;
+    background:linear-gradient(90deg,#22d3ee,#ff24b6);animation:slide 1.1s ease-in-out infinite}
+  @keyframes slide{0%{transform:translateX(-110%)}100%{transform:translateX(280%)}}
+</style></head>
+<body>
+  <div class="wrap">
+    <div class="logo">BIG STREET</div>
+    <div class="bar"><i></i></div>
+    <div class="sub">Connexion au serveur…</div>
+  </div>
+</body>
+</html>
