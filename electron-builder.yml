@@ -21,10 +21,17 @@ publish:
 
 win:
   target:
-    - target: nsis
+    # « nsis-web » : l'installeur distribue est un petit lanceur (~1,5 Mo) qui
+    # telecharge le paquet complet au moment de l'installation. L'utilisateur
+    # ne recupere plus 78 Mo avant de savoir s'il veut installer.
+    - target: nsis-web
       arch: [x64]
   icon: build/icon.png
   artifactName: BigStreet-Setup-${version}.${ext}
+
+# Emplacement d'ou le petit installeur tire le paquet complet : la release GitHub.
+nsisWeb:
+  appPackageUrl: https://github.com/StrangeLex/BigStreet/releases/download/v${version}/
 
 nsis:
   oneClick: false                 # l'utilisateur voit où il installe

@@ -1,12 +1,19 @@
 {
   "name": "bigstreet-launcher",
   "productName": "Big Street",
-  "version": "1.0.0",
-  "description": "Launcher officiel de Big Street",
+  "version": "1.0.1",
+  "description": "Launcher officiel de Big Street — ouvre le jeu dans une fenêtre native, se met à jour tout seul.",
   "main": "src/main.js",
   "author": "StrangeLex",
-  "license": "UNLICENSED",
-  "private": true,
+  "license": "MIT",
+  "homepage": "https://playbigstreet.com/",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/StrangeLex/BigStreet.git"
+  },
+  "bugs": {
+    "url": "https://github.com/StrangeLex/BigStreet/issues"
+  },
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win --publish never",
