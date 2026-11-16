@@ -7,9 +7,9 @@ name: Release launcher
 #  1. construction (electron-builder, sans publier) ;
 #  2. signature de l'installeur par SignPath — seulement si le projet SignPath
 #     est configuré (secret SIGNPATH_API_TOKEN), sinon l'installeur reste non signé ;
-#  3. attestation de provenance : GitHub certifie que ces fichiers sortent de
+#  3. empreintes SHA-256 (fichier SHA256SUMS.txt + notes de la release) ;
+#  4. attestation de provenance : GitHub certifie que ces fichiers sortent de
 #     CE commit, construits par CE workflow (vérifiable avec `gh attestation verify`) ;
-#  4. empreintes SHA-256 (fichier SHA256SUMS.txt + notes de la release) ;
 #  5. analyse VirusTotal — seulement si le secret VIRUSTOTAL_API_KEY existe ;
 #  6. publication de la release.
 on:
@@ -87,21 +87,19 @@ jobs:
           rm -f "dist/$setup.blockmap"
           powershell -NoProfile -Command "(Get-AuthenticodeSignature 'dist/$setup') | Format-List Status,SignerCertificate"
 
-      # ---- 3. Attestation de provenance --------------------------------------
-      - name: Attester la provenance
-        uses: actions/attest-build-provenance@v2
-        with:
-          subject-path: |
-            dist/*.exe
-            dist/*.7z
-            dist/latest.yml
-
-      # ---- 4. Empreintes ------------------------------------------------------
+      # ---- 3. Empreintes ------------------------------------------------------
       - name: Calculer les empreintes
         run: |
           cd dist
           sha256sum *.exe *.7z latest.yml > SHA256SUMS.txt
           cat SHA256SUMS.txt
+
+      # ---- 4. Attestation de provenance --------------------------------------
+      # (elle porte sur exactement les fichiers de SHA256SUMS.txt)
+      - name: Attester la provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-checksums: dist/SHA256SUMS.txt
 
       # ---- 5. VirusTotal ------------------------------------------------------
       - name: Analyse VirusTotal
