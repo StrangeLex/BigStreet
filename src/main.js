@@ -1,37 +1,84 @@
 /**
  * Big Street — launcher.
  *
- * Le launcher n'embarque PAS le jeu : il ouvre playbigstreet.com. Le contenu du
- * jeu se met donc à jour côté serveur, sans rien réinstaller.
+ * Déroulé : écran de chargement → mise à jour silencieuse du launcher →
+ * interface du launcher (connexion, nouveautés, options) → fenêtre de jeu.
  *
  * Deux mises à jour, deux comportements voulus :
- *  - LE LAUNCHER se met à jour TOUT SEUL au démarrage, sans rien demander.
- *    Aucun bouton, aucune boîte de dialogue : ça se passe pendant l'écran de
- *    chargement, avant que le jeu ne s'ouvre. Jamais en pleine partie.
- *  - LE JEU dispose d'un bouton de rafraîchissement, à la main du joueur.
+ *  - LE LAUNCHER se met à jour TOUT SEUL au démarrage, sans rien demander ni
+ *    afficher de bouton. Jamais en pleine partie.
+ *  - LE JEU se recharge à la demande, via le bouton ⟳ dans la fenêtre de jeu.
+ *
+ * Le launcher n'embarque pas le jeu : il ouvre playbigstreet.com. Le contenu
+ * se met donc à jour côté serveur, sans rien réinstaller.
  */
-const { app, BrowserWindow, shell, Menu, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
-const GAME_URL = process.env.BIGSTREET_URL || 'https://playbigstreet.com/';
+const SITE = (process.env.BIGSTREET_URL || 'https://playbigstreet.com').replace(/\/+$/, '');
 const ALLOWED = ['playbigstreet.com', 'www.playbigstreet.com'];
-// Au-delà, on considère que la vérification a échoué et on lance le jeu :
-// un serveur de mise à jour lent ne doit jamais empêcher de jouer.
+const REPO = 'StrangeLex/BigStreet';
 const UPDATE_TIMEOUT = 12000;
 
 log.transports.file.level = 'info';
 autoUpdater.logger = log;
 autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;   // filet : si une version arrive en
-                                           // cours de partie, elle s'installe à
-                                           // la fermeture, sans rien demander.
+autoUpdater.autoInstallOnAppQuit = true;
 
-let win = null, splash = null;
+let splash = null, launcher = null, game = null;
 
+// ------------------------------------------------------------- Réglages
+const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
+const TOTAL_MB = Math.round(os.totalmem() / 1048576);
+
+function readSettings() {
+  let s = {};
+  try { s = JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8')); } catch {}
+  // Par défaut, le jeu peut utiliser la moitié de la mémoire de la machine.
+  const pct = Math.min(90, Math.max(10, Number(s.ramPercent) || 50));
+  return { ramPercent: pct, token: typeof s.token === 'string' ? s.token : '' };
+}
+function writeSettings(patch) {
+  const next = { ...readSettings(), ...patch };
+  try {
+    fs.mkdirSync(path.dirname(SETTINGS_FILE()), { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE(), JSON.stringify(next, null, 2));
+  } catch (e) { log.error('réglages : ' + e); }
+  return next;
+}
+
+// La limite mémoire se pose au lancement du processus : elle ne peut pas
+// changer à chaud, d'où le message « au prochain démarrage » dans l'interface.
+{
+  const { ramPercent } = readSettings();
+  const capMb = Math.max(512, Math.round(TOTAL_MB * ramPercent / 100));
+  app.commandLine.appendSwitch('js-flags', `--max-old-space-size=${capMb}`);
+  log.info(`mémoire : ${ramPercent} % de ${TOTAL_MB} Mo → ${capMb} Mo`);
+}
+
+// ------------------------------------------------------------- Appels au site
+async function api(route, { method = 'GET', body, token } = {}) {
+  const headers = { 'Accept': 'application/json' };
+  if (body) headers['Content-Type'] = 'application/json';
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+  const res = await fetch(`${SITE}/api/${route}`, {
+    method, headers, body: body ? JSON.stringify(body) : undefined,
+  });
+  return res.json();
+}
+
+let account = null;   // compte connecté, en mémoire seulement
+
+// --------------------------------------------------------------- Fenêtres
 if (!app.requestSingleInstanceLock()) app.quit();
-app.on('second-instance', () => { if (win) { if (win.isMinimized()) win.restore(); win.focus(); } });
+app.on('second-instance', () => {
+  const w = game || launcher;
+  if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+});
 
 function createSplash() {
   splash = new BrowserWindow({
@@ -41,75 +88,52 @@ function createSplash() {
   });
   splash.loadFile(path.join(__dirname, 'splash.html'));
 }
-/** Met à jour la ligne d'état de l'écran de chargement. */
 function splashSay(text) {
   if (!splash || splash.isDestroyed()) return;
-  const safe = JSON.stringify(String(text));
   splash.webContents.executeJavaScript(
-    `document.querySelector('.sub') && (document.querySelector('.sub').textContent = ${safe});`
+    `document.querySelector('.sub') && (document.querySelector('.sub').textContent = ${JSON.stringify(String(text))});`
   ).catch(() => {});
 }
 
-// ---------------------------------------------------------------- Mise à jour
-/**
- * Vérifie et installe une mise à jour du launcher AVANT d'ouvrir le jeu.
- * Résout `true` si l'application va redémarrer (inutile de continuer),
- * `false` s'il faut poursuivre le démarrage normal.
- */
-function updateThenStart() {
-  if (!app.isPackaged) { log.info('développement : pas de mise à jour'); return Promise.resolve(false); }
-
-  return new Promise(resolve => {
-    let done = false;
-    const finish = v => { if (!done) { done = true; resolve(v); } };
-    // Quoi qu'il arrive, on n'attend pas indéfiniment.
-    const timer = setTimeout(() => { log.warn('vérification trop longue, on lance le jeu'); finish(false); }, UPDATE_TIMEOUT);
-
-    autoUpdater.on('update-not-available', () => { clearTimeout(timer); finish(false); });
-    autoUpdater.on('error', e => { log.error('mise à jour : ' + (e?.message || e)); clearTimeout(timer); finish(false); });
-
-    autoUpdater.on('update-available', i => {
-      clearTimeout(timer);                        // le téléchargement peut être long
-      log.info(`mise à jour ${i.version} : téléchargement`);
-      splashSay('Mise à jour du launcher…');
-    });
-    autoUpdater.on('download-progress', p => splashSay(`Mise à jour du launcher… ${Math.round(p.percent)} %`));
-
-    autoUpdater.on('update-downloaded', () => {
-      log.info('mise à jour prête : redémarrage automatique');
-      splashSay('Redémarrage…');
-      finish(true);
-      // Silencieux : ni question, ni bouton. L'app redémarre, c'est tout.
-      setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);
-    });
-
-    autoUpdater.checkForUpdates().catch(e => { log.error(e); clearTimeout(timer); finish(false); });
+function createLauncher() {
+  launcher = new BrowserWindow({
+    width: 880, height: 580, frame: false, resizable: false, center: true,
+    backgroundColor: '#ffffff', show: false,
+    icon: path.join(__dirname, '..', 'build', 'icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, 'launcher-preload.js'),
+      contextIsolation: true, nodeIntegration: false, sandbox: true,
+    },
   });
+  Menu.setApplicationMenu(null);
+  launcher.loadFile(path.join(__dirname, 'launcher.html'));
+  launcher.once('ready-to-show', () => {
+    if (splash && !splash.isDestroyed()) splash.destroy();
+    launcher.show();
+  });
+  launcher.on('closed', () => { launcher = null; });
 }
 
-// ------------------------------------------------------------------- Fenêtre
 /** Bouton discret, injecté dans la page, pour recharger le JEU à la demande. */
 const GAME_REFRESH_BUTTON = `(() => {
   if (document.getElementById('bsLauncherRefresh')) return;
   const b = document.createElement('button');
-  b.id = 'bsLauncherRefresh';
-  b.title = 'Mettre à jour le jeu';
-  b.textContent = '⟳';
-  b.style.cssText = [
-    'position:fixed','right:14px','bottom:14px','z-index:2147483647',
+  b.id = 'bsLauncherRefresh'; b.title = 'Mettre à jour le jeu'; b.textContent = '⟳';
+  b.style.cssText = ['position:fixed','right:14px','bottom:14px','z-index:2147483647',
     'width:38px','height:38px','border-radius:50%','border:none','cursor:pointer',
     'font-size:19px','line-height:1','color:#0b0f17','opacity:.35',
     'background:linear-gradient(135deg,#22d3ee,#ff24b6)',
-    'box-shadow:0 2px 10px rgba(0,0,0,.4)','transition:opacity .2s',
-  ].join(';');
+    'box-shadow:0 2px 10px rgba(0,0,0,.4)','transition:opacity .2s'].join(';');
   b.onmouseenter = () => b.style.opacity = '1';
   b.onmouseleave = () => b.style.opacity = '.35';
   b.onclick = () => { b.textContent = '…'; window.__bsRefresh && window.__bsRefresh(); };
   document.body.appendChild(b);
 })();`;
 
-function createWindow() {
-  win = new BrowserWindow({
+async function openGame() {
+  if (game && !game.isDestroyed()) { game.focus(); return; }
+
+  game = new BrowserWindow({
     width: 1280, height: 800, minWidth: 1024, minHeight: 640,
     backgroundColor: '#0b0f17', show: false,
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
@@ -119,48 +143,159 @@ function createWindow() {
       backgroundThrottling: false,
     },
   });
-  Menu.setApplicationMenu(null);
 
-  win.once('ready-to-show', () => {
-    if (splash && !splash.isDestroyed()) splash.destroy();
-    win.show();
-  });
+  // Le jeton obtenu dans le launcher est déposé là où le client web le lit,
+  // avant tout chargement : le joueur arrive déjà connecté.
+  // On pose le jeton AVANT le premier rendu du document : le client web le lit
+  // au demarrage, le joueur arrive donc deja connecte. (Charger puis recharger
+  // ferait clignoter le menu de connexion.)
+  const { token } = readSettings();
+  if (token) {
+    game.webContents.on('did-start-navigation', (_e, _url, _inPage, isMain) => {
+      if (!isMain) return;
+      game.webContents.executeJavaScript(
+        `try { localStorage.setItem('cubik.session', ${JSON.stringify(token)}); } catch {}`,
+        true
+      ).catch(() => {});
+    });
+  }
+  game.loadURL(`${SITE}/`);
 
   const external = url => { try { return !ALLOWED.includes(new URL(url).hostname); } catch { return true; } };
-  win.webContents.setWindowOpenHandler(({ url }) => {
+  game.webContents.setWindowOpenHandler(({ url }) => {
     if (external(url)) { shell.openExternal(url); return { action: 'deny' }; }
     return { action: 'allow' };
   });
-  win.webContents.on('will-navigate', (e, url) => {
+  game.webContents.on('will-navigate', (e, url) => {
     if (external(url)) { e.preventDefault(); shell.openExternal(url); }
   });
-
-  win.webContents.on('did-finish-load', () => {
-    win.webContents.executeJavaScript(GAME_REFRESH_BUTTON).catch(() => {});
+  game.webContents.on('did-finish-load', () => {
+    game.webContents.executeJavaScript(GAME_REFRESH_BUTTON).catch(() => {});
   });
-
-  win.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
+  game.webContents.on('did-fail-load', (_e, code, desc, url, isMainFrame) => {
     if (!isMainFrame) return;
     log.warn(`chargement échoué (${code} ${desc}) : ${url}`);
-    win.loadFile(path.join(__dirname, 'offline.html'));
+    game.loadFile(path.join(__dirname, 'offline.html'));
   });
 
-  // Rechargement du JEU demandé par le joueur : on vide le cache pour être sûr
-  // de récupérer les derniers modèles et données, puis on recharge.
-  const { ipcMain } = require('electron');
-  ipcMain.handle('bs:refresh-game', async () => {
-    try { await session.defaultSession.clearCache(); } catch {}
-    win.loadURL(GAME_URL);
+  game.once('ready-to-show', () => {
+    game.show();
+    if (launcher && !launcher.isDestroyed()) launcher.hide();   // le launcher s'efface
   });
+  game.on('closed', () => {
+    game = null;
+    if (launcher && !launcher.isDestroyed()) launcher.show();   // et revient à la fermeture
+    else app.quit();
+  });
+}
 
-  win.loadURL(GAME_URL);
+// ------------------------------------------------------------------- Ponts
+ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });
+ipcMain.handle('bs:close', () => { app.quit(); });
+
+ipcMain.handle('bs:login', async (_e, { name, password }) => {
+  try {
+    const r = await api('login', { method: 'POST', body: { name, password } });
+    if (r?.error) return { ok: false, error: r.error };
+    if (!r?.token) return { ok: false, error: 'Réponse inattendue du serveur.' };
+    account = r.account || { name };
+    writeSettings({ token: r.token });
+    return { ok: true, account };
+  } catch (e) {
+    log.error('connexion : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Vérifie ta connexion.' };
+  }
+});
+
+ipcMain.handle('bs:logout', async () => {
+  const { token } = readSettings();
+  try { if (token) await api('logout', { method: 'POST', token }); } catch {}
+  account = null;
+  writeSettings({ token: '' });
+  return { ok: true };
+});
+
+// Session déjà ouverte au démarrage précédent ? On la revalide auprès du site.
+ipcMain.handle('bs:account', async () => {
+  if (account) return account;
+  const { token } = readSettings();
+  if (!token) return null;
+  try {
+    // /api/me repond { account: {...} } — et { account: null } si la session
+    // n'est plus valable (expiree, revoquee, serveur reinitialise).
+    const me = await api('me', { token });
+    const a = me?.account;
+    if (!a?.name) { writeSettings({ token: '' }); return null; }
+    account = a;
+    return account;
+  } catch { return null; }
+});
+
+ipcMain.handle('bs:play', async () => {
+  try { await openGame(); return { ok: true }; }
+  catch (e) { log.error('lancement : ' + e); return { ok: false, error: String(e?.message || e) }; }
+});
+
+// Bouton de la fenetre de jeu : vide le cache puis recharge, pour etre certain
+// de recuperer les derniers modeles et donnees et non une version en cache.
+ipcMain.handle('bs:refresh-game', async () => {
+  if (!game || game.isDestroyed()) return { ok: false };
+  try { await game.webContents.session.clearCache(); } catch {}
+  game.loadURL(`${SITE}/`);
+  return { ok: true };
+});
+
+ipcMain.handle('bs:settings', () => ({ ...readSettings(), totalMb: TOTAL_MB, token: undefined }));
+ipcMain.handle('bs:save-settings', (_e, s) => {
+  const pct = Math.min(90, Math.max(10, Number(s?.ramPercent) || 50));
+  writeSettings({ ramPercent: pct });
+  return { ok: true };
+});
+
+/** Notes de version : les releases publiques du launcher. */
+ipcMain.handle('bs:notes', async () => {
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=6`,
+      { headers: { Accept: 'application/vnd.github+json' } });
+    const list = await res.json();
+    if (!Array.isArray(list)) return [];
+    return list.filter(r => !r.draft).map(r => ({
+      title: r.name || r.tag_name,
+      date: new Date(r.published_at).toLocaleDateString('fr-FR'),
+      body: (r.body || '').trim().slice(0, 1200),
+    }));
+  } catch (e) { log.error('notes : ' + e); return []; }
+});
+
+// --------------------------------------------------------- Mise à jour
+function updateThenStart() {
+  if (!app.isPackaged) { log.info('développement : pas de mise à jour'); return Promise.resolve(false); }
+  return new Promise(resolve => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; resolve(v); } };
+    const timer = setTimeout(() => { log.warn('vérification trop longue'); finish(false); }, UPDATE_TIMEOUT);
+
+    autoUpdater.on('update-not-available', () => { clearTimeout(timer); finish(false); });
+    autoUpdater.on('error', e => { log.error('mise à jour : ' + (e?.message || e)); clearTimeout(timer); finish(false); });
+    autoUpdater.on('update-available', i => {
+      clearTimeout(timer);
+      log.info(`mise à jour ${i.version}`);
+      splashSay('Mise à jour du launcher…');
+    });
+    autoUpdater.on('download-progress', p => splashSay(`Mise à jour du launcher… ${Math.round(p.percent)} %`));
+    autoUpdater.on('update-downloaded', () => {
+      splashSay('Redémarrage…');
+      finish(true);
+      setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);
+    });
+    autoUpdater.checkForUpdates().catch(e => { log.error(e); clearTimeout(timer); finish(false); });
+  });
 }
 
 app.whenReady().then(async () => {
   createSplash();
-  const restarting = await updateThenStart();
-  if (restarting) return;          // l'application redémarre : on n'ouvre rien
-  createWindow();
+  if (await updateThenStart()) return;   // l'application redémarre
+  createLauncher();
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

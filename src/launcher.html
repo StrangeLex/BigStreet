@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src data:;">
+<title>Big Street</title>
+<style>
+  :root{
+    --bg:#ffffff; --ink:#15181f; --muted:#6b7280; --line:#e6e8ee;
+    --accent:#ff24b6; --accent2:#22d3ee; --ok:#16a34a; --err:#dc2626;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:system-ui,-apple-system,"Segoe UI",sans-serif;overflow:hidden;user-select:none}
+
+  /* ---- barre de titre maison (la fenêtre n'a pas de bordure Windows) ---- */
+  .bar{height:38px;display:flex;align-items:center;gap:10px;padding:0 0 0 14px;
+    border-bottom:1px solid var(--line);-webkit-app-region:drag}
+  .bar .name{font-size:13px;font-weight:800;letter-spacing:.5px}
+  .bar .sp{flex:1}
+  .bar button{-webkit-app-region:no-drag;width:46px;height:38px;border:none;background:transparent;
+    cursor:pointer;font-size:15px;color:var(--muted);line-height:1}
+  .bar button:hover{background:#f3f4f7;color:var(--ink)}
+  .bar button.x:hover{background:#dc2626;color:#fff}
+
+  .body{height:calc(100% - 38px);display:flex}
+  .side{width:188px;border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:4px}
+  .side button{border:none;background:transparent;text-align:left;padding:10px 12px;border-radius:9px;
+    cursor:pointer;font-family:inherit;font-size:13.5px;color:var(--muted);font-weight:600}
+  .side button:hover{background:#f6f7f9;color:var(--ink)}
+  .side button.on{background:#f0f1f5;color:var(--ink)}
+  .side .sp{flex:1}
+  .who{font-size:11.5px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
+  .who b{color:var(--ink);display:block;font-size:13px}
+
+  .main{flex:1;padding:20px 22px;overflow-y:auto}
+  h2{margin:0 0 4px;font-size:17px}
+  .hint{margin:0 0 16px;font-size:12.5px;color:var(--muted);line-height:1.5}
+
+  label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:12px 0 5px}
+  input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--line);
+    border-radius:9px;font-family:inherit;font-size:13.5px;background:#fff;color:var(--ink);user-select:text}
+  input:focus{outline:none;border-color:var(--accent)}
+  .cta{margin-top:16px;width:100%;border:none;border-radius:11px;padding:13px;cursor:pointer;
+    font-family:inherit;font-size:14px;font-weight:800;color:#fff;
+    background:linear-gradient(135deg,var(--accent2),var(--accent))}
+  .cta:disabled{opacity:.55;cursor:default}
+  .msg{margin-top:10px;font-size:12.5px;min-height:17px}
+  .msg.err{color:var(--err)} .msg.ok{color:var(--ok)}
+
+  .notes article{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-bottom:11px}
+  .notes h3{margin:0 0 3px;font-size:14px}
+  .notes time{font-size:11.5px;color:var(--muted)}
+  .notes p{margin:7px 0 0;font-size:13px;line-height:1.55;color:#374151;white-space:pre-wrap}
+
+  .row{display:flex;align-items:center;gap:12px;margin-top:6px}
+  input[type=range]{flex:1;accent-color:var(--accent)}
+  .val{min-width:96px;text-align:right;font-size:13px;font-weight:700}
+  .note{margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.5}
+</style>
+</head>
+<body>
+  <div class="bar">
+    <span class="name">BIG STREET</span>
+    <span class="sp"></span>
+    <button id="min" title="Réduire">—</button>
+    <button id="close" class="x" title="Fermer">✕</button>
+  </div>
+
+  <div class="body">
+    <nav class="side">
+      <button data-tab="play" class="on">Jouer</button>
+      <button data-tab="notes">Nouveautés</button>
+      <button data-tab="opt">Options</button>
+      <span class="sp"></span>
+      <div class="who" id="who"><b>Non connecté</b>Connecte-toi pour jouer</div>
+    </nav>
+
+    <section class="main">
+      <!-- ---------------- Connexion / Jouer ---------------- -->
+      <div id="tab-play">
+        <div id="loginBox">
+          <h2>Connexion</h2>
+          <p class="hint">Utilise ton compte Big Street. Pas encore de compte ?
+             Crée-le sur playbigstreet.com, puis reviens ici.</p>
+          <label for="u">Pseudo</label>
+          <input id="u" type="text" autocomplete="username" spellcheck="false">
+          <label for="p">Mot de passe</label>
+          <input id="p" type="password" autocomplete="current-password">
+          <button class="cta" id="login">Se connecter</button>
+          <div class="msg" id="loginMsg"></div>
+        </div>
+
+        <div id="playBox" style="display:none">
+          <h2>Prêt à jouer</h2>
+          <p class="hint" id="playHint"></p>
+          <button class="cta" id="play">Lancer Big Street</button>
+          <button class="cta" id="logout"
+                  style="background:#f3f4f7;color:var(--ink);margin-top:9px">Se déconnecter</button>
+          <div class="msg" id="playMsg"></div>
+        </div>
+      </div>
+
+      <!-- ---------------- Notes de version ---------------- -->
+      <div id="tab-notes" style="display:none">
+        <h2>Nouveautés</h2>
+        <p class="hint">Les dernières versions du launcher et du jeu.</p>
+        <div class="notes" id="notes">Chargement…</div>
+      </div>
+
+      <!-- ---------------- Options ---------------- -->
+      <div id="tab-opt" style="display:none">
+        <h2>Options</h2>
+        <p class="hint">Réglages de l'application. Ils sont conservés sur ta machine.</p>
+
+        <label for="ram">Mémoire maximale allouée au jeu</label>
+        <div class="row">
+          <input id="ram" type="range" min="10" max="90" step="5">
+          <span class="val" id="ramVal">—</span>
+        </div>
+        <p class="note" id="ramNote"></p>
+
+        <button class="cta" id="save" style="max-width:200px">Enregistrer</button>
+        <div class="msg" id="optMsg"></div>
+      </div>
+    </section>
+  </div>
+
+  <script src="launcher.js"></script>
+</body>
+</html>
