@@ -81,14 +81,17 @@
   .art .cap{position:absolute;left:0;right:0;bottom:0;text-align:center;
     font-size:11px;color:var(--muted)}
 
-  /* ---- choix du personnage de départ ---- */
-  .picks{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px}
-  .pick{border:1px solid var(--line);background:var(--soft);border-radius:11px;padding:8px 4px 6px;
-    cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px}
-  .pick img{height:74px;pointer-events:none}
-  .pick small{font-size:10.5px;color:var(--muted)}
-  .pick.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--soft))}
-  .pick.on small{color:var(--ink);font-weight:700}
+  /* ---- connexion par Google / Twitch ---- */
+  .prov{display:flex;flex-direction:column;gap:8px}
+  .prov button{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;
+    border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:10px;
+    padding:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700}
+  .prov button:hover{background:var(--hover)}
+  .prov button .g{width:16px;height:16px;display:inline-block;border-radius:50%;
+    background:conic-gradient(#ea4335 0 25%,#fbbc05 0 50%,#34a853 0 75%,#4285f4 0)}
+  .prov button .t{width:16px;height:16px;display:inline-block;border-radius:3px;background:#9146ff}
+  .or{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--muted);font-size:11.5px}
+  .or::before,.or::after{content:'';flex:1;height:1px;background:var(--line)}
 
   .inline{display:flex;gap:8px;align-items:flex-end}
   .inline .cta{margin-top:0;width:auto;white-space:nowrap;padding:10px 14px;font-size:13px}
@@ -102,6 +105,16 @@
   input[type=range]{flex:1;accent-color:var(--accent)}
   .val{min-width:96px;text-align:right;font-size:13px;font-weight:700}
   .note{margin-top:8px;font-size:11.5px;color:var(--muted);line-height:1.5}
+
+  /* ---- à propos / désinstallation ---- */
+  .about{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-top:22px}
+  .about h3{margin:0 0 9px;font-size:13.5px}
+  .about dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:5px 14px;font-size:12.5px}
+  .about dt{color:var(--muted)} .about dd{margin:0;font-weight:700}
+  .about .state.ok{color:var(--ok)} .about .state.up{color:var(--accent)}
+  .danger{margin-top:14px;border:1px solid var(--err);background:transparent;color:var(--err);
+    border-radius:10px;padding:10px 14px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700}
+  .danger:hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
 </style>
 </head>
 <body>
@@ -131,12 +144,25 @@
               <button id="tabSignup">Créer un compte</button>
             </div>
 
+            <!-- Google / Twitch : commun aux deux onglets -->
+            <div class="prov" id="prov">
+              <button id="provGoogle"><i class="g"></i>Continuer avec Google</button>
+              <button id="provTwitch"><i class="t"></i>Continuer avec Twitch</button>
+            </div>
+            <div class="or" id="provOr">ou</div>
+
             <!-- Connexion -->
             <div id="loginBox">
-              <label for="u">Pseudo</label>
-              <input id="u" type="text" autocomplete="username" spellcheck="false" maxlength="16">
+              <label for="u">Pseudo ou adresse e-mail</label>
+              <input id="u" type="text" autocomplete="username" spellcheck="false">
               <label for="p">Mot de passe</label>
               <input id="p" type="password" autocomplete="current-password">
+              <p class="note" id="loginTip">Adresse e-mail et mot de passe vide : tu recevras un code
+                 pour entrer sans mot de passe.</p>
+              <div id="loginCodeStep" style="display:none">
+                <label for="lc">Code reçu par e-mail</label>
+                <input id="lc" type="text" inputmode="numeric" maxlength="6" spellcheck="false" placeholder="6 chiffres">
+              </div>
               <button class="cta" id="login">Se connecter</button>
               <div class="msg" id="loginMsg"></div>
             </div>
@@ -153,20 +179,29 @@
                 <label for="se">Adresse e-mail</label>
                 <div class="inline">
                   <input id="se" type="email" autocomplete="email" spellcheck="false">
-                  <button class="cta" id="sendCode">Recevoir le code</button>
+                  <button class="cta" id="sendCode">Envoyer le code</button>
                 </div>
                 <label for="sc">Code reçu par e-mail</label>
                 <input id="sc" type="text" inputmode="numeric" maxlength="6" spellcheck="false" placeholder="6 chiffres">
               </div>
-
-              <label>Ton personnage de départ</label>
-              <div class="picks" id="picks"></div>
 
               <label for="sr">Code de parrainage <span style="font-weight:600">(facultatif)</span></label>
               <input id="sr" type="text" spellcheck="false" maxlength="6" placeholder="ex. a1b2c3">
 
               <button class="cta" id="signup">Créer mon compte</button>
               <div class="msg" id="signupMsg"></div>
+            </div>
+
+            <!-- Première venue par Google / Twitch : il reste le pseudo à choisir -->
+            <div id="pseudoBox" style="display:none">
+              <h2 id="pseudoTitle">Choisis ton pseudo</h2>
+              <p class="hint">C'est le nom que les autres joueurs verront en ville.</p>
+              <label for="pn">Pseudo</label>
+              <input id="pn" type="text" spellcheck="false" maxlength="16" placeholder="3 à 16 caractères">
+              <button class="cta" id="pseudoGo">Créer mon compte</button>
+              <button class="cta" id="pseudoBack"
+                      style="background:var(--hover);color:var(--ink);margin-top:9px">Annuler</button>
+              <div class="msg" id="pseudoMsg"></div>
             </div>
           </div>
 
@@ -213,6 +248,18 @@
 
         <button class="cta" id="save" style="max-width:200px">Enregistrer</button>
         <div class="msg" id="optMsg"></div>
+
+        <div class="about">
+          <h3>À propos du launcher</h3>
+          <dl>
+            <dt>Version installée</dt><dd id="verCur">…</dd>
+            <dt>Dernière version</dt><dd id="verLast">…</dd>
+            <dt>État</dt><dd id="verState" class="state">Vérification…</dd>
+          </dl>
+          <p class="note">Le launcher se met à jour tout seul au démarrage : il n'y a rien à cliquer.</p>
+          <button class="danger" id="uninstall">Désinstaller le launcher</button>
+          <div class="msg" id="unMsg"></div>
+        </div>
       </div>
     </section>
   </div>

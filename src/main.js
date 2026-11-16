@@ -31,6 +31,15 @@ autoUpdater.autoInstallOnAppQuit = true;
 
 let splash = null, launcher = null, game = null;
 
+// Connexion Google / Twitch : elle s'ouvre dans le vrai navigateur (Google
+// refuse les fenetres embarquees), et le site nous rend la main par un lien
+// « bigstreet://auth#... ». Il faut donc que Windows sache a qui l'adresser.
+const PROTOCOL = 'bigstreet';
+if (process.defaultApp) {
+  if (process.argv.length >= 2) app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
+} else app.setAsDefaultProtocolClient(PROTOCOL);
+const authLinkIn = argv => (argv || []).find(a => typeof a === 'string' && a.startsWith(`${PROTOCOL}://`)) || null;
+
 // ------------------------------------------------------------- Réglages
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
 const TOTAL_MB = Math.round(os.totalmem() / 1048576);
@@ -79,10 +88,13 @@ let account = null;   // compte connecté, en mémoire seulement
 
 // --------------------------------------------------------------- Fenêtres
 if (!app.requestSingleInstanceLock()) app.quit();
-app.on('second-instance', () => {
+app.on('second-instance', (_e, argv) => {
   const w = game || launcher;
   if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+  const link = authLinkIn(argv);
+  if (link) handleAuthLink(link);
 });
+app.on('open-url', (e, url) => { e.preventDefault(); handleAuthLink(url); });   // (macOS)
 
 function createSplash() {
   splash = new BrowserWindow({
@@ -201,6 +213,36 @@ async function openGame() {
   });
 }
 
+/**
+ * Retour de Google / Twitch, via « bigstreet://auth#... ».
+ *  - session=<jeton>        : le compte existait, on est connecte
+ *  - google=<jeton>&name=.. : premiere venue, il reste a choisir un pseudo
+ *  - ...Error=<message>     : refus ou annulation
+ */
+async function handleAuthLink(raw) {
+  const q = new URLSearchParams(String(raw).split('#')[1] || '');
+  const send = payload => {
+    if (!launcher || launcher.isDestroyed()) return;
+    if (launcher.isMinimized()) launcher.restore();
+    launcher.show(); launcher.focus();
+    launcher.webContents.send('bs:auth', payload);
+  };
+  const err = q.get('googleError') || q.get('twitchError');
+  if (err) return send({ ok: false, error: err });
+
+  const session = q.get('session');
+  if (session) {
+    writeSettings({ token: session });
+    try { const me = await api('me', { token: session }); account = me?.account || null; } catch { account = null; }
+    return send(account ? { ok: true, account } : { ok: false, error: 'Session refusee par le site.' });
+  }
+  for (const provider of ['google', 'twitch']) {
+    const pending = q.get(provider);
+    if (pending) return send({ ok: true, provider, pending, suggest: q.get('name') || '' });
+  }
+  send({ ok: false, error: 'Reponse inattendue du site.' });
+}
+
 // ------------------------------------------------------------------- Ponts
 ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });
 ipcMain.handle('bs:close', () => { app.quit(); });
@@ -248,6 +290,71 @@ ipcMain.handle('bs:register', async (_e, { name, password, email, code, ref, loo
     return { ok: true, account };
   } catch (e) {
     log.error('inscription : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
+  }
+});
+
+// Connexion / inscription par Google ou Twitch. Le site n'ouvre ces chemins que
+// s'il a les identifiants du fournisseur : on le lui demande.
+ipcMain.handle('bs:oauth-available', async () => {
+  const one = async p => { try { return !!(await api(`auth/${p}`))?.available; } catch { return false; } };
+  const [google, twitch] = await Promise.all([one('google'), one('twitch')]);
+  return { google, twitch };
+});
+
+// `app: true` : le site renverra vers sa page de retour au launcher, et non vers le jeu.
+ipcMain.handle('bs:oauth', async (_e, provider) => {
+  if (provider !== 'google' && provider !== 'twitch') return { ok: false, error: 'Fournisseur inconnu.' };
+  try {
+    const r = await api(`auth/${provider}/start`, { method: 'POST', body: { app: true } });
+    if (r?.error) return { ok: false, error: r.error };
+    if (!r?.url) return { ok: false, error: 'Reponse inattendue du serveur.' };
+    await shell.openExternal(r.url);
+    return { ok: true };
+  } catch (e) {
+    log.error('oauth : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
+  }
+});
+
+// Premiere venue par Google / Twitch : le joueur choisit son pseudo, le compte est cree.
+ipcMain.handle('bs:oauth-finish', async (_e, { provider, pending, name }) => {
+  if (provider !== 'google' && provider !== 'twitch') return { ok: false, error: 'Fournisseur inconnu.' };
+  try {
+    const r = await api(`auth/${provider}/finish`, { method: 'POST', body: { pending, name } });
+    if (r?.error) return { ok: false, error: r.error };
+    if (!r?.token) return { ok: false, error: 'Reponse inattendue du serveur.' };
+    account = r.account || { name };
+    writeSettings({ token: r.token });
+    return { ok: true, account };
+  } catch (e) {
+    log.error('oauth finish : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
+  }
+});
+
+// Connexion sans mot de passe : code a 6 chiffres envoye a l'adresse du compte.
+ipcMain.handle('bs:login-code', async (_e, email) => {
+  try {
+    const r = await api('login/code', { method: 'POST', body: { email } });
+    if (r?.error) return { ok: false, error: r.error };
+    return { ok: true, info: r?.info || 'Code envoye.' };
+  } catch (e) {
+    log.error('code de connexion : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
+  }
+});
+
+ipcMain.handle('bs:login-email', async (_e, { email, code }) => {
+  try {
+    const r = await api('login/email', { method: 'POST', body: { email, code } });
+    if (r?.error) return { ok: false, error: r.error };
+    if (!r?.token) return { ok: false, error: 'Reponse inattendue du serveur.' };
+    account = r.account || null;
+    writeSettings({ token: r.token });
+    return { ok: true, account };
+  } catch (e) {
+    log.error('connexion par code : ' + e);
     return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
   }
 });
@@ -304,12 +411,65 @@ ipcMain.handle('bs:notes', async () => {
       { headers: { Accept: 'application/vnd.github+json' } });
     const list = await res.json();
     if (!Array.isArray(list)) return [];
-    return list.filter(r => !r.draft).map(r => ({
+    // Une release sans texte n'apprend rien au joueur : on ne l'affiche pas.
+    return list.filter(r => !r.draft && (r.body || '').trim()).map(r => ({
       title: r.name || r.tag_name,
       date: new Date(r.published_at).toLocaleDateString('fr-FR'),
-      body: (r.body || '').trim().slice(0, 1200),
+      body: r.body.trim().slice(0, 1200),
     }));
   } catch (e) { log.error('notes : ' + e); return []; }
+});
+
+/** Version installee, derniere version publiee, et si l'une vaut l'autre. */
+ipcMain.handle('bs:version', async () => {
+  const current = app.getVersion();
+  let latest = '';
+  try {
+    const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`,
+      { headers: { Accept: 'application/vnd.github+json' } });
+    latest = String((await res.json())?.tag_name || '').replace(/^v/, '');
+  } catch (e) { log.error('version : ' + e); }
+  return { current, latest, upToDate: !!latest && latest === current, packaged: app.isPackaged };
+});
+
+/**
+ * Desinstallation : on lance le desinstalleur de Windows, celui qu'on trouve
+ * dans le registre de l'utilisateur (NSIS l'y inscrit), sinon celui pose a cote
+ * de l'executable. Le launcher se ferme ensuite : il ne peut pas s'effacer
+ * lui-meme pendant qu'il tourne.
+ */
+function uninstallerPath() {
+  try {
+    const out = require('node:child_process')
+      .execFileSync('reg', ['query', `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${app.getName()}`,
+        '/v', 'UninstallString'], { encoding: 'utf8', timeout: 4000 });
+    const m = /UninstallString\s+REG_SZ\s+(.+)/.exec(out);
+    const exe = m && m[1].trim().replace(/^"|"$/g, '');
+    if (exe && fs.existsSync(exe)) return exe;
+  } catch { /* pas dans le registre : on tente a cote de l'executable */ }
+  try {
+    const dir = path.dirname(app.getPath('exe'));
+    for (const f of [`Uninstall ${app.getName()}.exe`, 'Uninstall Big Street.exe', 'Uninstall.exe']) {
+      const full = path.join(dir, f);
+      if (fs.existsSync(full)) return full;
+    }
+  } catch { /* rien trouve */ }
+  return null;
+}
+
+ipcMain.handle('bs:uninstall', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: 'La desinstallation n\u2019est geree que sous Windows.' };
+  if (!app.isPackaged) return { ok: false, error: 'Version de developpement : rien a desinstaller.' };
+  const exe = uninstallerPath();
+  if (!exe) return { ok: false, error: 'Desinstalleur introuvable. Passe par Parametres > Applications.' };
+  try {
+    require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
+    setTimeout(() => app.quit(), 600);
+    return { ok: true };
+  } catch (e) {
+    log.error('desinstallation : ' + e);
+    return { ok: false, error: 'Lancement du desinstalleur impossible.' };
+  }
 });
 
 // --------------------------------------------------------- Mise à jour

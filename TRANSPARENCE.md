@@ -10,6 +10,15 @@ tout tient en 120 lignes et il est public.
   Pseudo, mot de passe, e-mail et code de parrainage partent directement au
   site du jeu (`/api/login`, `/api/register`), à personne d'autre. Le mot de
   passe n'est jamais écrit sur ton disque : seul le jeton de session l'est.
+- **Google et Twitch** s'ouvrent dans **ton navigateur habituel**, jamais dans
+  une fenêtre du launcher : tu vois la vraie adresse et le vrai cadenas. Le
+  site te renvoie ensuite à l'application par un lien `bigstreet://`. Le
+  launcher ne voit jamais ton mot de passe Google ou Twitch.
+- **Connexion sans mot de passe** : donne ton adresse, reçois un code à six
+  chiffres valable 10 minutes, utilisable une seule fois.
+- Les e-mails (codes d'inscription et de connexion) partent du serveur du jeu
+  via Resend, depuis `no-reply@playbigstreet.com`. Le launcher, lui, n'envoie
+  aucun e-mail : il ne fait que transmettre ton adresse au site.
 - Ouvre ensuite `https://playbigstreet.com/` dans une fenêtre Chromium (Electron).
 - Affiche un écran de chargement pendant la connexion.
 - Renvoie les liens externes vers ton navigateur habituel.
@@ -21,6 +30,10 @@ tout tient en 120 lignes et il est public.
 - Le **jeu**, lui, se recharge à la demande avec le bouton ⟳ en bas à droite.
 - Écrit un journal local, sur ta machine uniquement
   (`%APPDATA%\Big Street\logs\main.log`).
+- Affiche dans **Options** la version installée, la dernière version publiée,
+  et un bouton **Désinstaller le launcher** : il lance le désinstalleur de
+  Windows, celui-là même que tu trouverais dans Paramètres > Applications.
+  Ton compte et ta progression ne sont pas touchés : ils sont sur le serveur.
 
 ## Ce que le launcher ne fait pas
 
