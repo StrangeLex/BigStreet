@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ce que SignPath signe : l'installeur de Big Street envoyé par le workflow
+     (un .exe dans l'archive de l'artefact GitHub), et rien d'autre. -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <zip-file>
+    <pe-file path="BigStreet-Setup-*.exe" max-matches="1">
+      <authenticode-sign />
+    </pe-file>
+  </zip-file>
+</artifact-configuration>

@@ -812,10 +812,13 @@ ipcMain.handle('bs:notes', async () => {
     const list = await res.json();
     if (!Array.isArray(list)) return [];
     // Une release sans texte n'apprend rien au joueur : on ne l'affiche pas.
-    return list.filter(r => !r.draft && (r.body || '').trim()).map(r => ({
+    // (sous « <!-- verification --> » : empreintes et provenance, pour qui veut
+    // verifier sur GitHub, pas pour l'onglet Notes)
+    const text = r => (r.body || '').split('<!-- verification -->')[0].trim();
+    return list.filter(r => !r.draft && text(r)).map(r => ({
       title: r.name || r.tag_name,
       date: new Date(r.published_at).toLocaleDateString('fr-FR'),
-      body: r.body.trim().slice(0, 1200),
+      body: text(r).slice(0, 1200),
     }));
   } catch (e) { log.error('notes : ' + e); return []; }
 });

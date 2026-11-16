@@ -1,8 +1,7 @@
 # Transparence
 
 Tu installes un exécutable. Tu as le droit de savoir exactement ce qu'il fait.
-Ce document est la référence ; le code de cette page est dans `src/main.js`,
-tout tient en 120 lignes et il est public.
+Ce document est la référence ; le code est dans `src/`, et il est public.
 
 ## Ce que le launcher fait
 
@@ -52,8 +51,13 @@ tout tient en 120 lignes et il est public.
 - **Aucun accès à tes fichiers**, hors son propre dossier d'installation et de
   journal. Le rendu web tourne en bac à sable (`sandbox: true`,
   `nodeIntegration: false`, `contextIsolation: true`).
-- Il **ne touche à rien d'autre** que son propre dossier. Seule l'application
-  elle-meme est mise a jour, jamais le reste de ta machine.
+- Il **ne touche à rien d'autre** que son propre dossier, avec une seule
+  exception : sous Windows, il règle Big Street en « Hautes performances »
+  dans Paramètres > Affichage > Graphiques (clé
+  `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`), pour que le jeu
+  tourne sur ta carte graphique dédiée. Une fois, et jamais si tu as déjà fait
+  ce choix toi-même. Tu peux le changer à tout moment au même endroit. Seule
+  l'application elle-même est mise à jour, jamais le reste de ta machine.
 
 ## Les personnages affichés
 
@@ -91,18 +95,31 @@ jour côté serveur. C'est pour ça que tu n'as jamais de « patch » à téléc
 
 ## Vérifier ce que tu télécharges
 
-Chaque release publie un fichier `latest.yml` qui contient l'empreinte SHA-512
-de l'installeur. L'updater la vérifie automatiquement, et tu peux la vérifier
-à la main :
+Chaque release donne, dans ses notes sur GitHub :
+
+- l'**empreinte SHA-256** de l'installeur, en clair, et le fichier
+  `SHA256SUMS.txt` pour tous les fichiers publiés ;
+- une **attestation de provenance** : GitHub certifie que l'installeur a été
+  construit par le workflow public de ce dépôt, à partir du commit indiqué,
+  sans retouche à la main ;
+- le **journal complet de la construction** (onglet Actions) ;
+- quand elle est faite, l'**analyse VirusTotal** de l'installeur.
+
+Comparer l'empreinte :
 
 ```powershell
 # PowerShell, dans le dossier de téléchargement
-Get-FileHash .\BigStreet-Setup-1.0.1.exe -Algorithm SHA512
+Get-FileHash .\BigStreet-Setup-1.5.4.exe -Algorithm SHA256
 ```
 
-Compare le résultat avec le champ `sha512` du `latest.yml` de la release
-(il est encodé en base64, pas en hexadécimal — passe-le par un convertisseur
-ou fie-toi à la vérification automatique de l'updater).
+Vérifier la provenance (avec l'outil `gh` de GitHub) :
+
+```bash
+gh attestation verify BigStreet-Setup-1.5.4.exe --repo StrangeLex/BigStreet
+```
+
+La mise à jour automatique vérifie aussi, seule, l'empreinte SHA-512 inscrite
+dans `latest.yml` avant d'installer quoi que ce soit.
 
 Et si tu ne fais confiance à rien de tout ça : **compile-le toi-même**.
 
@@ -111,12 +128,16 @@ git clone https://github.com/StrangeLex/BigStreet.git
 cd BigStreet && npm install && npm run dist
 ```
 
-## « Éditeur inconnu » au lancement
+## Signature et « Éditeur inconnu »
 
-Windows affiche cet avertissement parce que l'installeur n'est pas signé par un
-certificat payant. Ce n'est pas un signe de danger, seulement l'absence d'un
-certificat à plusieurs centaines d'euros par an. Si cela te gêne, la solution
-ci-dessus reste valable : compile depuis les sources.
+L'installeur est signé gratuitement par **SignPath Foundation**, qui signe les
+projets open source après les avoir examinés. Ce que signe le dépôt, et qui
+approuve chaque signature, est décrit dans [CODE_SIGNING.md](CODE_SIGNING.md).
+Clic droit sur l'installeur > Propriétés > Signatures numériques : tu y lis
+« SignPath Foundation ».
+
+Tant qu'une version n'est pas signée, Windows affiche « Éditeur inconnu ». Ce
+n'est pas un signe de danger, seulement l'absence de signature.
 
 ## Une question, un doute ?
 

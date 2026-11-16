@@ -58,3 +58,8 @@ Vérifie l'interface (identifiants, CSP), les garde-fous de chemin, une
 installation complète des ressources, sa reprise, la réparation d'un fichier
 abîmé, et le refus d'un lien `bigstreet://` forgé. Les réglages en place sont
 restaurés à la fin.
+
+## Signature
+
+Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Politique de signature : [CODE_SIGNING.md](CODE_SIGNING.md).
