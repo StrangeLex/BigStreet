@@ -122,6 +122,8 @@
     background:rgba(255,255,255,.22);overflow:hidden;display:none}
   .hero .mini i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent))}
 
+  .tick{display:flex;align-items:center;gap:9px;cursor:pointer;margin-top:16px}
+  .tick input{width:17px;height:17px;margin:0;accent-color:#22d3ee}
   /* ---- amis ---- */
   .flist{display:flex;flex-direction:column;gap:7px;margin-top:4px}
   .fr{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:10px 13px}
@@ -361,6 +363,9 @@
           <span class="val" id="ramVal">—</span>
         </div>
         <p class="note" id="ramNote"></p>
+
+        <label class="tick"><input id="autoStart" type="checkbox"> Lancer Big Street au démarrage de Windows</label>
+        <p class="note">Il démarre discrètement dans les icônes cachées, près de l'horloge, sans ouvrir de fenêtre, et te prévient des demandes d'amis.</p>
 
         <button class="cta" id="save" style="max-width:200px">Enregistrer</button>
         <div class="msg" id="optMsg"></div>

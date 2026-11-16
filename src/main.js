@@ -12,7 +12,7 @@
  * Le launcher n'embarque pas le jeu : il ouvre playbigstreet.com. Le contenu
  * se met donc à jour côté serveur, sans rien réinstaller.
  */
-const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net, safeStorage, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net, safeStorage, Notification, Tray } = require('electron');
 const crypto = require('node:crypto');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
@@ -78,6 +78,8 @@ function readSettings() {
   return { ramPercent: pct, token: openToken(s.token),
     installDir: typeof s.installDir === 'string' ? s.installDir : '',
     authNonce: s.authNonce && typeof s.authNonce.value === 'string' ? s.authNonce : null,
+    // (demarrage avec Windows, en arriere-plan : oui par defaut, decochable dans Options)
+    autoStart: s.autoStart !== false, trayHint: !!s.trayHint,
     // (demandes d'amis deja notifiees : pseudo -> jeton de la notification)
     friendNotified: Object.fromEntries(Object.entries(s.friendNotified && typeof s.friendNotified === 'object' ? s.friendNotified : {})
       .filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && /^[0-9a-f]{32}$/.test(v))) };
@@ -161,8 +163,7 @@ if (!app.requestSingleInstanceLock()) {
   app.exit(0);
 }
 app.on('second-instance', (_e, argv) => {
-  const w = game || launcher;
-  if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
+  showMain();
   const link = authLinkIn(argv);
   if (link) handleLink(link);
 });
@@ -205,6 +206,7 @@ function createLauncher() {
   launcher.loadFile(path.join(__dirname, 'launcher.html'));
   const reveal = () => {
     if (splash && !splash.isDestroyed()) splash.destroy();
+    if (HIDDEN_START) return;               // (demarrage avec Windows : il reste dans les icones cachees)
     if (launcher && !launcher.isDestroyed() && !launcher.isVisible()) launcher.show();
   };
   launcher.once('ready-to-show', reveal);
@@ -215,6 +217,9 @@ function createLauncher() {
     log.error('interface interrompue : ' + d.reason);
     reveal();
   });
+  // Fermer la fenetre la range dans les icones cachees : le launcher continue de
+  // veiller aux demandes d'amis. « Quitter » (clic droit sur l'icone) l'arrete vraiment.
+  launcher.on('close', e => { if (!quitting) { e.preventDefault(); hideToTray(); } });
   launcher.on('closed', () => { launcher = null; });
   // Le joueur bascule Windows en clair/sombre pendant que le launcher est
   // ouvert : la CSS suit toute seule, le fond de fenetre non.
@@ -300,6 +305,7 @@ async function openGame() {
   });
   game.on('closed', () => {
     game = null;
+    if (quitting) return;
     if (launcher && !launcher.isDestroyed()) launcher.show();   // et revient à la fermeture
     else app.quit();
   });
@@ -348,6 +354,56 @@ async function handleAuthLink(raw) {
     if (pending) return send({ ok: true, provider, pending, suggest: q.get('name') || '' });
   }
   send({ ok: false, error: 'Reponse inattendue du site.' });
+}
+
+// ---------------------------------------------- Icones cachees et demarrage
+// Lance par Windows a l'ouverture de session (« --hidden ») : ni ecran de
+// chargement ni fenetre, seulement l'icone pres de l'horloge.
+const HIDDEN_START = process.argv.includes('--hidden');
+let tray = null, quitting = false;
+function quitApp() { quitting = true; app.quit(); }
+app.on('before-quit', () => { quitting = true; });
+
+/** Demarrage avec Windows : une entree « Big Street » dans les applications de demarrage (Gestionnaire des taches). */
+function setAutoStart(on) {
+  if (process.platform !== 'win32' || !app.isPackaged) return;
+  try { app.setLoginItemSettings({ openAtLogin: !!on, path: process.execPath, args: ['--hidden'], name: 'Big Street' }); }
+  catch (e) { log.warn('démarrage avec Windows : ' + e); }
+}
+function showMain() {
+  const w = (game && !game.isDestroyed()) ? game : launcher;
+  if (!w || w.isDestroyed()) return;
+  if (w.isMinimized()) w.restore();
+  w.show(); w.focus();
+}
+function hideToTray() {
+  if (launcher && !launcher.isDestroyed()) launcher.hide();
+  // (la premiere fois seulement : dire ou il est passe)
+  if (!readSettings().trayHint && Notification.isSupported()) {
+    writeSettings({ trayHint: true });
+    new Notification({ title: 'Big Street', body: 'Big Street reste dans les icônes cachées, près de l’horloge. Clic droit sur l’icône > Quitter pour l’arrêter.' }).show();
+  }
+}
+function trayMenu() {
+  return Menu.buildFromTemplate([
+    { label: 'Ouvrir Big Street', click: showMain },
+    { label: 'Amis', click: () => { showMain(); showFriends(); } },
+    { type: 'separator' },
+    { label: 'Lancer au démarrage de Windows', type: 'checkbox', checked: readSettings().autoStart,
+      enabled: process.platform === 'win32' && app.isPackaged,
+      click: i => { writeSettings({ autoStart: i.checked }); setAutoStart(i.checked); } },
+    { type: 'separator' },
+    { label: 'Quitter Big Street', click: quitApp },
+  ]);
+}
+function createTray() {
+  if (tray) return;
+  tray = new Tray(path.join(__dirname, 'tray.png'));
+  tray.setToolTip('Big Street');
+  tray.on('click', showMain);
+  // (menu reconstruit a chaque ouverture : la case suit le reglage)
+  tray.on('right-click', () => tray.popUpContextMenu(trayMenu()));
+  if (process.platform !== 'win32') tray.setContextMenu(trayMenu());
 }
 
 // ------------------------------------------- Notifications de demandes d'amis
@@ -636,7 +692,7 @@ function serveLocalAssets(session) {
 
 // ------------------------------------------------------------------- Ponts
 ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });
-ipcMain.handle('bs:close', () => { app.quit(); });
+ipcMain.handle('bs:close', () => { hideToTray(); });
 
 ipcMain.handle('bs:login', async (_e, { name, password }) => {
   try {
@@ -883,10 +939,11 @@ ipcMain.handle('bs:friend-action', async (_e, { action, name }) => {
   } catch (e) { log.error('amis : ' + e); return { ok: false, error: 'Serveur injoignable.' }; }
 });
 
-ipcMain.handle('bs:settings', () => ({ ...readSettings(), totalMb: TOTAL_MB, token: undefined }));
+ipcMain.handle('bs:settings', () => ({ ...readSettings(), totalMb: TOTAL_MB, token: undefined, friendNotified: undefined, authNonce: undefined }));
 ipcMain.handle('bs:save-settings', (_e, s) => {
   const pct = Math.min(90, Math.max(10, Number(s?.ramPercent) || 50));
   writeSettings({ ramPercent: pct });
+  if (typeof s?.autoStart === 'boolean') { writeSettings({ autoStart: s.autoStart }); setAutoStart(s.autoStart); }
   return { ok: true };
 });
 
@@ -952,8 +1009,9 @@ ipcMain.handle('bs:uninstall', async () => {
   const exe = uninstallerPath();
   if (!exe) return { ok: false, error: 'Desinstalleur introuvable. Passe par Parametres > Applications.' };
   try {
+    setAutoStart(false);                   // (plus de demarrage avec Windows)
     require('node:child_process').spawn(exe, [], { detached: true, stdio: 'ignore' }).unref();
-    setTimeout(() => app.quit(), 600);
+    setTimeout(quitApp, 600);
     return { ok: true };
   } catch (e) {
     log.error('desinstallation : ' + e);
@@ -1009,14 +1067,22 @@ if (process.env.BS_SELFTEST) {
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {
   preferDedicatedGpu();
-  createSplash();
+  createTray();
+  setAutoStart(readSettings().autoStart);   // (reecrit a chaque lancement : suit le dossier d'installation)
   // Lien de connexion cliqué launcher fermé : on le traite une fois la fenêtre prête.
   if (startupLink) setTimeout(() => handleLink(startupLink), 1500);
-  if (await updateThenStart()) return;   // l'application redémarre
+  if (HIDDEN_START) {
+    // (en arriere-plan : la mise a jour se telecharge sans rien montrer et s'installe a la fermeture)
+    if (app.isPackaged) autoUpdater.checkForUpdates().catch(e => log.error(e));
+  } else {
+    createSplash();
+    if (await updateThenStart()) return;   // l'application redémarre
+  }
   createLauncher();
   // Demandes d'amis : un premier coup d'oeil peu apres l'ouverture, puis toutes les 30 s.
   setTimeout(friendWatch, 8000);
   setInterval(friendWatch, 30000);
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+// (toutes les fenetres fermees : il reste l'icone ; seul « Quitter » arrete l'application)
+app.on('window-all-closed', () => { if (quitting) app.quit(); });

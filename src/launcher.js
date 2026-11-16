@@ -452,6 +452,11 @@ function paintRam() {
     + `La modification s'applique au prochain démarrage du launcher.`;
 }
 $('#ram').oninput = paintRam;
+$('#autoStart').onchange = async () => {
+  await bs.saveSettings({ ramPercent: Number($('#ram').value), autoStart: $('#autoStart').checked });
+  const msg = $('#optMsg'); msg.className = 'msg ok';
+  msg.textContent = $('#autoStart').checked ? 'Big Street démarrera avec Windows.' : 'Big Street ne démarrera plus avec Windows.';
+};
 
 $('#save').onclick = async () => {
   const msg = $('#optMsg');
@@ -516,6 +521,7 @@ document.addEventListener('keydown', e => {
   settings = await bs.settings();
   $('#ram').value = settings.ramPercent;
   paintRam();
+  $('#autoStart').checked = settings.autoStart !== false;
   await refreshInstall();            // (dossier et état visibles même déconnecté)
   bs.version().then(v => {
     versionInfo = v;

@@ -27,6 +27,15 @@ Ce document est la référence ; le code est dans `src/`, et il est public.
   d'ouvrir le jeu. Jamais en pleine partie. Il n'y a volontairement ni
   bouton ni question : le launcher est toujours à jour.
 - Le **jeu**, lui, se recharge à la demande avec le bouton ⟳ en bas à droite.
+- **Icônes cachées et démarrage avec Windows** : Big Street a son icône près
+  de l'horloge. Fermer la fenêtre l'y range, et seul « Quitter Big Street »
+  (clic droit sur l'icône) l'arrête vraiment. Par défaut, il démarre avec
+  Windows, discrètement, dans les icônes cachées, sans ouvrir de fenêtre. Pour
+  ça, il crée une entrée « Big Street » dans les applications de démarrage
+  (`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`), visible dans le
+  Gestionnaire des tâches. Tu peux le désactiver dans Options ou dans le menu
+  de l'icône. La désinstallation retire cette entrée et la préférence de carte
+  graphique.
 - **Demandes d'amis** : l'onglet Amis montre les demandes reçues (sur le site
   ou en jeu) et permet de les accepter ou de les refuser. Tant que le launcher
   est ouvert et que tu n'es pas en jeu, il regarde toutes les 30 secondes s'il
@@ -61,8 +70,8 @@ Ce document est la référence ; le code est dans `src/`, et il est public.
 - **Aucun accès à tes fichiers**, hors son propre dossier d'installation et de
   journal. Le rendu web tourne en bac à sable (`sandbox: true`,
   `nodeIntegration: false`, `contextIsolation: true`).
-- Il **ne touche à rien d'autre** que son propre dossier, avec une seule
-  exception : sous Windows, il règle Big Street en « Hautes performances »
+- Il **ne touche à rien d'autre** que son propre dossier, avec deux
+  exceptions : l'entrée de démarrage avec Windows (voir plus haut), et sous Windows, il règle Big Street en « Hautes performances »
   dans Paramètres > Affichage > Graphiques (clé
   `HKCU\Software\Microsoft\DirectX\UserGpuPreferences`), pour que le jeu
   tourne sur ta carte graphique dédiée. Une fois, et jamais si tu as déjà fait
