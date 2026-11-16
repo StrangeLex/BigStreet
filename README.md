@@ -17,6 +17,8 @@ Seule l'application elle-même se met à jour, automatiquement, via les
 - le jeu continue de tourner quand la fenêtre n'est pas au premier plan
 - écran clair quand le serveur est injoignable
 - mise à jour automatique, différentielle
+- carte graphique dédiée (NVIDIA/AMD) demandée sur les PC à deux circuits
+- ressources du jeu et suppression de bruit du micro (RNNoise) installables sur le disque
 
 ## Développement
 

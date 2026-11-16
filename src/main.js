@@ -92,6 +92,27 @@ function writeSettings(patch) {
   log.info(`mémoire : ${ramPercent} % de ${TOTAL_MB} Mo → ${capMb} Mo`);
 }
 
+// Carte graphique : sur un PC portable a deux circuits (Intel/AMD integre +
+// NVIDIA), Chromium prend par defaut le petit circuit integre. On demande la
+// carte dediee, pour le rendu du jeu comme pour les pilotes NVIDIA.
+app.commandLine.appendSwitch('force_high_performance_gpu');
+
+/**
+ * Windows : inscrit Big Street dans « Paramètres graphiques » en mode « Hautes
+ * performances » (le meme reglage que Parametres > Affichage > Graphiques),
+ * une seule fois, sans ecraser un choix que le joueur aurait fait lui-meme.
+ */
+function preferDedicatedGpu() {
+  if (process.platform !== 'win32' || !app.isPackaged) return;
+  const { execFile } = require('node:child_process');
+  const key = 'HKCU\\Software\\Microsoft\\DirectX\\UserGpuPreferences', exe = process.execPath;
+  execFile('reg', ['query', key, '/v', exe], { windowsHide: true }, err => {
+    if (!err) return;                       // (deja regle, par nous ou par le joueur)
+    execFile('reg', ['add', key, '/v', exe, '/t', 'REG_SZ', '/d', 'GpuPreference=2;', '/f'], { windowsHide: true },
+      e => log.info(e ? 'préférence GPU : ' + e.message : 'préférence GPU : hautes performances'));
+  });
+}
+
 // ------------------------------------------------------------- Appels au site
 async function api(route, { method = 'GET', body, token } = {}) {
   const headers = { 'Accept': 'application/json' };
@@ -225,6 +246,10 @@ async function openGame() {
     },
   });
 
+  // Le titre de la fenetre reste le nom du jeu, quoi qu'annonce la page web.
+  game.setTitle('Big Street');
+  game.on('page-title-updated', e => e.preventDefault());
+
   serveLocalAssets(game.webContents.session);
 
   // Le jeton obtenu dans le launcher est déposé là où le client web le lit,
@@ -351,14 +376,16 @@ const freshDl = () => ({ state: 'idle', done: 0, total: 0, files: 0, count: 0,
 let dl = freshDl();
 const MIME = { '.json': 'application/json', '.bbmodel': 'application/json', '.glb': 'model/gltf-binary',
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
-  '.svg': 'image/svg+xml', '.wasm': 'application/wasm' };
+  '.svg': 'image/svg+xml', '.wasm': 'application/wasm', '.js': 'text/javascript' };
 
 /**
- * Chemin de ressource accepte : « /models/... » ou « /data/... », sans remontee
- * de dossier. La liste vient du site, mais un serveur compromis ne doit pas
- * pouvoir faire ecrire le launcher n'importe ou sur le disque.
+ * Chemin de ressource accepte : « /models/... », « /data/... » ou le seul
+ * dossier de RNNoise (suppression de bruit du micro), sans remontee de
+ * dossier. La liste vient du site, mais un serveur compromis ne doit pas
+ * pouvoir faire ecrire le launcher n'importe ou sur le disque, ni lui faire
+ * servir d'autres scripts que ceux-la.
  */
-const SAFE_ASSET = /^\/(models|data)\/[A-Za-z0-9._\-/]+$/;
+const SAFE_ASSET = /^\/(models|data|js\/vendor\/rnnoise)\/[A-Za-z0-9._\-/]+$/;
 function safeDest(dir, rel) {
   if (!SAFE_ASSET.test(rel) || rel.includes('..')) return null;
   const dest = path.resolve(dir, rel.replace(/^\//, ''));
@@ -736,7 +763,7 @@ ipcMain.handle('bs:install-remove', async () => {
   if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Téléchargement en cours.' };
   const dir = installDir();
   try {
-    for (const sub of ['models', 'data']) fs.rmSync(path.join(dir, sub), { recursive: true, force: true });
+    for (const sub of ['models', 'data', 'js']) fs.rmSync(path.join(dir, sub), { recursive: true, force: true });
     fs.rmSync(manifestFile(dir), { force: true });
     manCache = { path: '', mtime: 0, data: null };
     dl = freshDl();
@@ -892,6 +919,7 @@ if (process.env.BS_SELFTEST) {
 }
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {
+  preferDedicatedGpu();
   createSplash();
   // Lien de connexion cliqué launcher fermé : on le traite une fois la fenêtre prête.
   if (startupLink) setTimeout(() => handleAuthLink(startupLink), 1500);

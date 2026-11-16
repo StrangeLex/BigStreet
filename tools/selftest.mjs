@@ -60,6 +60,8 @@ async function checkRuntime() {
     ok('chemin normal accepté', !!m.safeDest(dir, '/models/a.bbmodel'));
     ok('remontée de dossier refusée', m.safeDest(dir, '/models/../../etc/passwd') === null);
     ok('chemin hors ressources refusé', m.safeDest(dir, '/etc/passwd') === null);
+    ok('RNNoise accepté', !!m.safeDest(dir, '/js/vendor/rnnoise/rnnoise.wasm'));
+    ok('autre script refusé', m.safeDest(dir, '/js/main.js') === null);
 
     m.writeSettings({ installDir: dir, token: '', authNonce: null });
     await m.runInstall(dir);
