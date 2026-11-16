@@ -37,6 +37,7 @@ contextBridge.exposeInMainWorld('bs', {
   pickDir: () => ipcRenderer.invoke('bs:pick-dir'),
   installStart: dir => ipcRenderer.invoke('bs:install-start', dir),
   installCancel: () => ipcRenderer.invoke('bs:install-cancel'),
+  installRemove: () => ipcRenderer.invoke('bs:install-remove'),
   installState: () => ipcRenderer.invoke('bs:install-state'),
 
   // Amis

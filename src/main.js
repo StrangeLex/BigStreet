@@ -12,7 +12,8 @@
  * Le launcher n'embarque pas le jeu : il ouvre playbigstreet.com. Le contenu
  * se met donc à jour côté serveur, sans rien réinstaller.
  */
-const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net, safeStorage } = require('electron');
+const crypto = require('node:crypto');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const path = require('node:path');
@@ -30,6 +31,10 @@ autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
 let splash = null, launcher = null, game = null;
+// Connexion Google/Twitch en attente de retour. Conserve dans les reglages :
+// le joueur peut fermer le launcher pendant qu'il est dans son navigateur.
+const getNonce = () => { const n = readSettings().authNonce; return n && n.value && n.exp > Date.now() ? n : null; };
+const setNonce = n => writeSettings({ authNonce: n });
 
 // Connexion Google / Twitch : elle s'ouvre dans le vrai navigateur (Google
 // refuse les fenetres embarquees), et le site nous rend la main par un lien
@@ -44,19 +49,36 @@ const authLinkIn = argv => (argv || []).find(a => typeof a === 'string' && a.sta
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
 const TOTAL_MB = Math.round(os.totalmem() / 1048576);
 
+// Le jeton de session vaut un mot de passe : on le chiffre avec le coffre du
+// systeme (DPAPI sous Windows) quand il est disponible. L'ancien reglage en
+// clair reste lu une fois, puis reecrit chiffre.
+const sealToken = t => {
+  if (!t) return '';
+  try { if (safeStorage.isEncryptionAvailable()) return 'enc:' + safeStorage.encryptString(t).toString('base64'); }
+  catch (e) { log.warn('coffre indisponible : ' + e); }
+  return t;
+};
+const openToken = v => {
+  if (typeof v !== 'string' || !v) return '';
+  if (!v.startsWith('enc:')) return v;
+  try { return safeStorage.decryptString(Buffer.from(v.slice(4), 'base64')); }
+  catch (e) { log.warn('jeton illisible : ' + e); return ''; }
+};
+
 function readSettings() {
   let s = {};
   try { s = JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8')); } catch {}
   // Par défaut, le jeu peut utiliser la moitié de la mémoire de la machine.
   const pct = Math.min(90, Math.max(10, Number(s.ramPercent) || 50));
-  return { ramPercent: pct, token: typeof s.token === 'string' ? s.token : '',
-    installDir: typeof s.installDir === 'string' ? s.installDir : '' };
+  return { ramPercent: pct, token: openToken(s.token),
+    installDir: typeof s.installDir === 'string' ? s.installDir : '',
+    authNonce: s.authNonce && typeof s.authNonce.value === 'string' ? s.authNonce : null };
 }
 function writeSettings(patch) {
   const next = { ...readSettings(), ...patch };
   try {
     fs.mkdirSync(path.dirname(SETTINGS_FILE()), { recursive: true });
-    fs.writeFileSync(SETTINGS_FILE(), JSON.stringify(next, null, 2));
+    fs.writeFileSync(SETTINGS_FILE(), JSON.stringify({ ...next, token: sealToken(next.token) }, null, 2), { mode: 0o600 });
   } catch (e) { log.error('réglages : ' + e); }
   return next;
 }
@@ -79,16 +101,36 @@ async function api(route, { method = 'GET', body, token } = {}) {
   // sinon connexion, inscription et deconnexion repondent « Origine refusee ».
   if (method !== 'GET') headers['Origin'] = SITE;
   if (token) headers['Authorization'] = `Bearer ${token}`;
+  // Sans delai maximal, un serveur qui ne repond pas laisse l'interface
+  // bloquee sur « Connexion… » indefiniment.
   const res = await fetch(`${SITE}/api/${route}`, {
     method, headers, body: body ? JSON.stringify(body) : undefined,
+    signal: AbortSignal.timeout(15000),
   });
   return res.json();
 }
 
 let account = null;   // compte connecté, en mémoire seulement
 
+/**
+ * Ouverture dans le navigateur : uniquement http(s). Une page compromise
+ * pourrait sinon faire ouvrir « file:// » ou un autre protocole de la machine.
+ */
+async function openExternal(url, hosts = null) {
+  let u;
+  try { u = new URL(String(url)); } catch { return false; }
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') { log.warn('adresse refusée : ' + url); return false; }
+  if (hosts && !hosts.includes(u.hostname)) { log.warn('hôte refusé : ' + u.hostname); return false; }
+  try { await shell.openExternal(u.href); return true; } catch (e) { log.error('ouverture : ' + e); return false; }
+}
+
 // --------------------------------------------------------------- Fenêtres
-if (!app.requestSingleInstanceLock()) app.quit();
+if (!app.requestSingleInstanceLock()) {
+  // Deuxieme lancement : la premiere fenetre reprend la main (second-instance),
+  // celui-ci s'arrete tout de suite — sans quoi il continuait a construire ses
+  // fenetres pendant que la fermeture se faisait.
+  app.exit(0);
+}
 app.on('second-instance', (_e, argv) => {
   const w = game || launcher;
   if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
@@ -96,6 +138,10 @@ app.on('second-instance', (_e, argv) => {
   if (link) handleAuthLink(link);
 });
 app.on('open-url', (e, url) => { e.preventDefault(); handleAuthLink(url); });   // (macOS)
+
+// Lien cliqué alors que le launcher était fermé : Windows démarre l'application
+// avec l'adresse en argument — « second-instance » ne se déclenche pas.
+const startupLink = authLinkIn(process.argv);
 
 function createSplash() {
   splash = new BrowserWindow({
@@ -127,9 +173,17 @@ function createLauncher() {
   });
   Menu.setApplicationMenu(null);
   launcher.loadFile(path.join(__dirname, 'launcher.html'));
-  launcher.once('ready-to-show', () => {
+  const reveal = () => {
     if (splash && !splash.isDestroyed()) splash.destroy();
-    launcher.show();
+    if (launcher && !launcher.isDestroyed() && !launcher.isVisible()) launcher.show();
+  };
+  launcher.once('ready-to-show', reveal);
+  // Filet : si la page n'arrive pas a s'afficher, l'ecran de chargement ne doit
+  // pas rester seul a l'ecran indefiniment.
+  setTimeout(reveal, 8000);
+  launcher.webContents.on('render-process-gone', (_e, d) => {
+    log.error('interface interrompue : ' + d.reason);
+    reveal();
   });
   launcher.on('closed', () => { launcher = null; });
   // Le joueur bascule Windows en clair/sombre pendant que le launcher est
@@ -166,6 +220,7 @@ async function openGame() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true, nodeIntegration: false, sandbox: true,
       backgroundThrottling: false,
+      additionalArguments: [`--bs-version=${app.getVersion()}`],
     },
   });
 
@@ -190,11 +245,11 @@ async function openGame() {
 
   const external = url => { try { return !ALLOWED.includes(new URL(url).hostname); } catch { return true; } };
   game.webContents.setWindowOpenHandler(({ url }) => {
-    if (external(url)) { shell.openExternal(url); return { action: 'deny' }; }
+    if (external(url)) { openExternal(url); return { action: 'deny' }; }
     return { action: 'allow' };
   });
   game.webContents.on('will-navigate', (e, url) => {
-    if (external(url)) { e.preventDefault(); shell.openExternal(url); }
+    if (external(url)) { e.preventDefault(); openExternal(url); }
   });
   game.webContents.on('did-finish-load', () => {
     game.webContents.executeJavaScript(GAME_REFRESH_BUTTON).catch(() => {});
@@ -223,7 +278,19 @@ async function openGame() {
  *  - ...Error=<message>     : refus ou annulation
  */
 async function handleAuthLink(raw) {
-  const q = new URLSearchParams(String(raw).split('#')[1] || '');
+  // N'importe quelle page web peut faire ouvrir « bigstreet://... ». Sans
+  // controle, elle pourrait y glisser SA session et connecter le joueur sur un
+  // compte qui n'est pas le sien. On n'accepte donc un retour que s'il porte le
+  // jeton a usage unique tire juste avant, pour la connexion qu'on a lancee.
+  const url = String(raw);
+  if (!/^bigstreet:\/\/auth(\/|#|$)/i.test(url)) { log.warn('lien ignoré : ' + url.slice(0, 40)); return; }
+  const q = new URLSearchParams(url.split('#')[1] || '');
+  const want = getNonce();
+  if (!want || (q.get('app') || '') !== want.value) {
+    log.warn('retour de connexion non sollicité : ignoré');
+    return;
+  }
+  setNonce(null);                         // a usage unique
   const send = payload => {
     if (!launcher || launcher.isDestroyed()) return;
     if (launcher.isMinimized()) launcher.restore();
@@ -235,9 +302,12 @@ async function handleAuthLink(raw) {
 
   const session = q.get('session');
   if (session) {
-    writeSettings({ token: session });
+    // On valide la session aupres du site AVANT de l'ecrire : un jeton refuse
+    // n'a rien a faire dans les reglages.
     try { const me = await api('me', { token: session }); account = me?.account || null; } catch { account = null; }
-    return send(account ? { ok: true, account } : { ok: false, error: 'Session refusee par le site.' });
+    if (!account) return send({ ok: false, error: 'Session refusée par le site.' });
+    writeSettings({ token: session });
+    return send({ ok: true, account });
   }
   for (const provider of ['google', 'twitch']) {
     const pending = q.get(provider);
@@ -257,29 +327,97 @@ const defaultInstallDir = () => path.join(app.getPath('userData'), 'jeu');
 const installDir = () => readSettings().installDir || defaultInstallDir();
 const manifestFile = dir => path.join(dir, 'manifest.json');
 
+// Le manifeste est relu a chaque requete du jeu : on le garde en memoire tant
+// que le fichier n'a pas change, sinon on reparserait 1 700 entrees par image.
+let manCache = { path: '', mtime: 0, data: null };
 function readManifest(dir = installDir()) {
+  const file = manifestFile(dir);
   try {
-    const m = JSON.parse(fs.readFileSync(manifestFile(dir), 'utf8'));
-    return m && m.files ? m : null;
-  } catch { return null; }
+    const mtime = fs.statSync(file).mtimeMs;
+    if (manCache.path === file && manCache.mtime === mtime) return manCache.data;
+    const m = JSON.parse(fs.readFileSync(file, 'utf8'));
+    manCache = { path: file, mtime, data: m && m.files ? m : null };
+    return manCache.data;
+  } catch {
+    if (manCache.path === file) manCache = { path: '', mtime: 0, data: null };
+    return null;
+  }
 }
 
 // Etat du telechargement, lu par la page « Telechargement » (debit, reste, etc.)
-let dl = { state: 'idle', done: 0, total: 0, files: 0, count: 0, speed: 0, maxSpeed: 0, eta: 0, error: '' };
+const freshDl = () => ({ state: 'idle', done: 0, total: 0, files: 0, count: 0,
+  skipped: 0, speed: 0, maxSpeed: 0, eta: 0, error: '' });
+let dl = freshDl();
 const MIME = { '.json': 'application/json', '.bbmodel': 'application/json', '.glb': 'model/gltf-binary',
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp',
+  '.svg': 'image/svg+xml', '.wasm': 'application/wasm' };
+
+/**
+ * Chemin de ressource accepte : « /models/... » ou « /data/... », sans remontee
+ * de dossier. La liste vient du site, mais un serveur compromis ne doit pas
+ * pouvoir faire ecrire le launcher n'importe ou sur le disque.
+ */
+const SAFE_ASSET = /^\/(models|data)\/[A-Za-z0-9._\-/]+$/;
+function safeDest(dir, rel) {
+  if (!SAFE_ASSET.test(rel) || rel.includes('..')) return null;
+  const dest = path.resolve(dir, rel.replace(/^\//, ''));
+  return dest.startsWith(path.resolve(dir) + path.sep) ? dest : null;
+}
+
+/** Telechargement d'un fichier, avec deux reprises : un 502 passager ne doit pas tout arreter. */
+async function fetchAsset(url, tries = 3) {
+  let last;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(30000) });
+      if (res.ok) return Buffer.from(await res.arrayBuffer());
+      last = new Error(`HTTP ${res.status}`);
+      if (res.status === 404) break;            // inutile d'insister
+    } catch (e) { last = e; }
+    await new Promise(r => setTimeout(r, 400 * (i + 1)));
+  }
+  throw last || new Error('échec');
+}
 
 async function runInstall(dir) {
-  dl = { state: 'list', done: 0, total: 0, files: 0, count: 0, speed: 0, maxSpeed: 0, eta: 0, error: '' };
+  dl = freshDl();
+  dl.state = 'list';
+  let failed = null;
   try {
     const list = await api('assets');
     if (!Array.isArray(list?.files) || !list.files.length) throw new Error('liste de ressources vide');
-    dl.total = list.total; dl.count = list.files.length; dl.state = 'download';
 
-    fs.mkdirSync(dir, { recursive: true });
-    const versions = {};
-    // Debit : mesure sur une fenetre glissante d'environ 3 s, pour une valeur
-    // stable a l'affichage sans lisser au point de ne plus rien dire.
+    // Reprise : ce qui est deja la, a la bonne version et a la bonne taille,
+    // n'est pas retelecharge. Sert aussi de « verifier et reparer ».
+    const have = readManifest(dir)?.files || {};
+    const todo = [], keep = {};
+    let total = 0;
+    for (const f of list.files) {
+      if (!safeDest(dir, f.p)) { log.warn('ressource au chemin refusé : ' + f.p); continue; }
+      const dest = safeDest(dir, f.p);
+      let ok = have[f.p] !== undefined && have[f.p] === (f.v || '');
+      if (ok) { try { ok = fs.statSync(dest).size === f.s; } catch { ok = false; } }
+      if (ok) { keep[f.p] = f.v || ''; dl.skipped++; } else { todo.push(f); total += f.s; }
+    }
+    dl.total = total; dl.count = todo.length; dl.state = 'download';
+    if (!todo.length) {
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(manifestFile(dir), JSON.stringify({ at: Date.now(), site: SITE, files: keep }));
+      dl.state = 'done';
+      log.info(`ressources déjà complètes (${dl.skipped} fichiers)`);
+      return;
+    }
+
+    // Place disponible : mieux vaut le dire avant qu'au 1 500e fichier.
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const st = fs.statfsSync(dir);
+      const free = st.bavail * st.bsize;
+      if (free < total * 1.15) throw new Error(`place insuffisante sur le disque (${Math.round(free / 1048576)} Mo libres, ${Math.round(total / 1048576)} Mo nécessaires)`);
+    } catch (e) { if (/place insuffisante/.test(e.message)) throw e; }
+
+    // Debit : fenetre glissante d'environ 3 s — stable a l'affichage sans
+    // lisser au point de ne plus rien dire.
     let windowBytes = 0, windowStart = Date.now();
     const bump = n => {
       dl.done += n; windowBytes += n;
@@ -292,29 +430,35 @@ async function runInstall(dir) {
       }
     };
 
-    const queue = list.files.slice();
+    const queue = todo.slice();
     const worker = async () => {
       while (queue.length) {
-        if (dl.state === 'cancel') return;
+        if (failed || dl.state === 'cancel') return;      // un echec arrete tout le monde
         const f = queue.shift();
-        const dest = path.join(dir, f.p.replace(/^\//, ''));
-        fs.mkdirSync(path.dirname(dest), { recursive: true });
-        const url = `${SITE}${f.p}${f.v ? `?v=${encodeURIComponent(f.v)}` : ''}`;
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`${f.p} : ${res.status}`);
-        const buf = Buffer.from(await res.arrayBuffer());
-        fs.writeFileSync(dest, buf);
-        versions[f.p] = f.v || '';
-        dl.files++; bump(buf.length);
+        const dest = safeDest(dir, f.p);
+        try {
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          const url = `${SITE}${f.p}${f.v ? `?v=${encodeURIComponent(f.v)}` : ''}`;
+          const buf = await fetchAsset(url);
+          fs.writeFileSync(dest, buf);
+          keep[f.p] = f.v || '';
+          dl.files++; bump(buf.length);
+        } catch (e) { failed = new Error(`${f.p} : ${e.message}`); return; }
       }
     };
     await Promise.all(Array.from({ length: 6 }, worker));
-    if (dl.state === 'cancel') { dl.state = 'idle'; return; }
+    if (failed) throw failed;
+    if (dl.state === 'cancel') {
+      // Ce qui est deja descendu est conserve : la reprise repartira de la.
+      fs.writeFileSync(manifestFile(dir), JSON.stringify({ at: Date.now(), site: SITE, files: keep }));
+      dl.state = 'idle';
+      return;
+    }
 
-    fs.writeFileSync(manifestFile(dir), JSON.stringify({ at: Date.now(), site: SITE, files: versions }));
+    fs.writeFileSync(manifestFile(dir), JSON.stringify({ at: Date.now(), site: SITE, files: keep }));
     writeSettings({ installDir: dir });
     dl.state = 'done'; dl.speed = 0; dl.eta = 0;
-    log.info(`ressources installees dans ${dir} (${dl.files} fichiers)`);
+    log.info(`ressources installées dans ${dir} (${dl.files} téléchargés, ${dl.skipped} déjà présents)`);
   } catch (e) {
     log.error('installation : ' + e);
     dl.state = 'error'; dl.error = String(e?.message || e);
@@ -328,19 +472,20 @@ async function runInstall(dir) {
  * locale ne peut pas faire jouer avec un vieux contenu.
  */
 function serveLocalAssets(session) {
-  const man = readManifest();
-  if (!man || session.__bsAssets) return;
+  if (session.__bsAssets) return;
   session.__bsAssets = true;
-  const dir = installDir();
   session.protocol.handle('https', req => {
     try {
       const u = new URL(req.url);
+      // Le dossier et le manifeste sont relus a chaque fois : le joueur peut
+      // installer, changer de disque ou effacer pendant que le jeu tourne.
       if (`${u.protocol}//${u.host}` === SITE && req.method === 'GET') {
-        const v = man.files[u.pathname];
+        const dir = installDir(), man = readManifest(dir);
+        const v = man?.files?.[u.pathname];
         const want = u.searchParams.get('v') || '';
         if (v !== undefined && (!want || want === v)) {
-          const file = path.join(dir, u.pathname.replace(/^\//, ''));
-          if (fs.existsSync(file)) {
+          const file = safeDest(dir, u.pathname);
+          if (file && fs.existsSync(file)) {
             return new Response(fs.readFileSync(file), {
               headers: { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' },
             });
@@ -350,7 +495,7 @@ function serveLocalAssets(session) {
     } catch { /* au moindre doute : le reseau */ }
     return net.fetch(req, { bypassCustomProtocolHandlers: true });
   });
-  log.info(`ressources locales servies depuis ${dir}`);
+  log.info('ressources locales actives');
 }
 
 // ------------------------------------------------------------------- Ponts
@@ -416,12 +561,20 @@ ipcMain.handle('bs:oauth-available', async () => {
 ipcMain.handle('bs:oauth', async (_e, provider) => {
   if (provider !== 'google' && provider !== 'twitch') return { ok: false, error: 'Fournisseur inconnu.' };
   try {
-    const r = await api(`auth/${provider}/start`, { method: 'POST', body: { app: true } });
-    if (r?.error) return { ok: false, error: r.error };
-    if (!r?.url) return { ok: false, error: 'Reponse inattendue du serveur.' };
-    await shell.openExternal(r.url);
+    // Jeton a usage unique, valable 10 min : le site le renverra dans l'adresse
+    // de retour, et seul ce retour-la sera accepte (voir handleAuthLink).
+    const nonce = crypto.randomBytes(18).toString('hex');
+    setNonce({ value: nonce, exp: Date.now() + 10 * 60000 });
+    const r = await api(`auth/${provider}/start`, { method: 'POST', body: { app: true, nonce } });
+    if (r?.error) { setNonce(null); return { ok: false, error: r.error }; }
+    if (!r?.url) { setNonce(null); return { ok: false, error: 'Reponse inattendue du serveur.' }; }
+    if (!await openExternal(r.url, ['accounts.google.com', 'id.twitch.tv'])) {
+      setNonce(null);
+      return { ok: false, error: 'Adresse de connexion refusée.' };
+    }
     return { ok: true };
   } catch (e) {
+    setNonce(null);
     log.error('oauth : ' + e);
     return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
   }
@@ -521,6 +674,7 @@ ipcMain.handle('bs:install-info', () => {
 // Choix du disque / dossier : c'est l'explorateur de Windows qui s'ouvre, le
 // launcher n'ecrit que la ou le joueur a dit.
 ipcMain.handle('bs:pick-dir', async () => {
+  if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Téléchargement en cours : arrête-le avant de changer de dossier.' };
   const win = launcher && !launcher.isDestroyed() ? launcher : undefined;
   const r = await dialog.showOpenDialog(win, {
     title: 'Ou installer les ressources de Big Street ?',
@@ -530,15 +684,39 @@ ipcMain.handle('bs:pick-dir', async () => {
   });
   if (r.canceled || !r.filePaths?.[0]) return { ok: false };
   const dir = path.join(r.filePaths[0], 'Big Street');
+  const before = installDir(), had = !!readManifest(before);
   writeSettings({ installDir: dir });
-  return { ok: true, dir };
+  manCache = { path: '', mtime: 0, data: null };
+  dl = freshDl();
+  // Les fichiers de l'ancien dossier ne sont pas effaces d'office : on le dit,
+  // le joueur decide.
+  return { ok: true, dir, previous: had && before !== dir ? before : '' };
 });
 
-ipcMain.handle('bs:install-start', async (_e, dir) => {
-  if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Telechargement deja en cours.' };
-  const target = dir || installDir();
+// Le dossier vient toujours des reglages, jamais de l'interface : le processus
+// principal ne doit pas ecrire a une adresse dictee par la page.
+ipcMain.handle('bs:install-start', async () => {
+  if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Téléchargement déjà en cours.' };
+  const target = installDir();
   runInstall(target);               // (en tache de fond : l'interface suit l'etat)
   return { ok: true, dir: target };
+});
+
+// Supprime les ressources installees : le jeu repassera simplement par le reseau.
+ipcMain.handle('bs:install-remove', async () => {
+  if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Téléchargement en cours.' };
+  const dir = installDir();
+  try {
+    for (const sub of ['models', 'data']) fs.rmSync(path.join(dir, sub), { recursive: true, force: true });
+    fs.rmSync(manifestFile(dir), { force: true });
+    manCache = { path: '', mtime: 0, data: null };
+    dl = freshDl();
+    log.info('ressources supprimées : ' + dir);
+    return { ok: true };
+  } catch (e) {
+    log.error('suppression : ' + e);
+    return { ok: false, error: String(e?.message || e) };
+  }
 });
 ipcMain.handle('bs:install-cancel', () => { if (dl.state === 'download') dl.state = 'cancel'; return { ok: true }; });
 ipcMain.handle('bs:install-state', () => dl);
@@ -574,7 +752,7 @@ ipcMain.handle('bs:save-settings', (_e, s) => {
 ipcMain.handle('bs:notes', async () => {
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases?per_page=6`,
-      { headers: { Accept: 'application/vnd.github+json' } });
+      { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10000) });
     const list = await res.json();
     if (!Array.isArray(list)) return [];
     // Une release sans texte n'apprend rien au joueur : on ne l'affiche pas.
@@ -592,7 +770,7 @@ ipcMain.handle('bs:version', async () => {
   let latest = '';
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`,
-      { headers: { Accept: 'application/vnd.github+json' } });
+      { headers: { Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(10000) });
     latest = String((await res.json())?.tag_name || '').replace(/^v/, '');
   } catch (e) { log.error('version : ' + e); }
   return { current, latest, upToDate: !!latest && latest === current, packaged: app.isPackaged };
@@ -665,6 +843,8 @@ function updateThenStart() {
 
 app.whenReady().then(async () => {
   createSplash();
+  // Lien de connexion cliqué launcher fermé : on le traite une fois la fenêtre prête.
+  if (startupLink) setTimeout(() => handleAuthLink(startupLink), 1500);
   if (await updateThenStart()) return;   // l'application redémarre
   createLauncher();
 });

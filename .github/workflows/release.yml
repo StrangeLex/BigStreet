@@ -28,3 +28,21 @@ jobs:
         run: npx electron-builder --win --publish always
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Les releases s'accumulent à chaque déploiement. On ne garde que les
+      # trois dernières : la version en cours et deux retours arrière possibles.
+      # (Supprimer une release retire aussi le paquet que son installeur web
+      # allait chercher : un vieux .exe encore sur un disque ne pourra plus
+      # s'installer. C'est le prix du ménage, et c'est voulu.)
+      - name: Ne garder que les 3 dernières versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          vieilles=$(gh release list --limit 100 --json tagName,createdAt \
+            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName')
+          if [ -z "$vieilles" ]; then echo "rien à supprimer"; exit 0; fi
+          for t in $vieilles; do
+            echo "suppression de $t"
+            gh release delete "$t" --yes --cleanup-tag || echo "  (échec, on continue)"
+          done

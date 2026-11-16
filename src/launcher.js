@@ -21,6 +21,7 @@ document.querySelectorAll('.side button[data-tab]').forEach(b => {
     if (b.dataset.tab === 'notes') loadNotes();
     if (b.dataset.tab === 'opt') { loadVersion(); paintDir(); }
     if (b.dataset.tab === 'friends') loadFriends();
+    if (b.dataset.tab === 'dl') bs.installState().then(paintDownload);
   };
 });
 
@@ -79,7 +80,6 @@ function showAccount(acc) {
   $('#tabFriends').style.display = on ? '' : 'none';
   if (on) {
     $('#playHint').textContent = `Connecté en tant que ${acc.name}`;
-    refreshInstall();
     loadFriends();
   }
 }
@@ -275,23 +275,32 @@ function paintHero(st) {
 }
 
 function paintDownload(st) {
-  const pct = st.total ? Math.min(100, st.done / st.total * 100) : 0;
+  // Rien en cours mais tout est là : la page doit dire « installé », pas « 0 % ».
+  const settled = (st.state === 'idle' || st.state === 'done') && install?.installed;
+  const pct = settled ? 100 : (st.total ? Math.min(100, st.done / st.total * 100) : 0);
   $('#dlBar').style.width = pct + '%';
   $('#dlPct').textContent = `${Math.floor(pct)} %`;
-  $('#dlAmount').textContent = st.total ? `${Mo(st.done)} sur ${Mo(st.total)}` : '';
+  $('#dlAmount').textContent = settled && !st.total
+    ? `${install.files} fichiers`
+    : (st.total ? `${Mo(st.done)} sur ${Mo(st.total)}` : '');
   $('#dlSpeed').textContent = st.state === 'download' ? debit(st.speed) : '—';
   $('#dlMax').textContent = st.maxSpeed ? debit(st.maxSpeed) : '—';
   $('#dlEta').textContent = st.state === 'download' ? duree(st.eta) : '—';
   $('#dlFiles').textContent = st.count ? `${st.files} / ${st.count}` : '—';
-  $('#dlPath').textContent = install ? `Dossier : ${install.dir}` : '';
-  $('#dlCancel').style.display = st.state === 'download' ? '' : 'none';
-  const title = { list: 'Préparation…', download: 'Téléchargement en cours',
-    done: 'Installation terminée', error: 'Téléchargement interrompu' }[st.state] || 'Téléchargement';
-  $('#dlTitle').textContent = title;
+  $('#dlPath').textContent = install
+    ? `Dossier : ${install.dir}${st.skipped ? ` — ${st.skipped} fichiers déjà présents, non retéléchargés` : ''}`
+    : '';
+  const busy = st.state === 'download' || st.state === 'list';
+  $('#dlCancel').style.display = busy ? '' : 'none';
+  $('#dlRepair').style.display = !busy && install?.installed ? '' : 'none';
+  $('#dlRemove').style.display = !busy && install?.installed ? '' : 'none';
+  $('#dlTitle').textContent = { list: 'Préparation…', download: 'Téléchargement en cours',
+    done: 'Installation terminée', error: 'Téléchargement interrompu' }[st.state]
+    || (settled ? 'Ressources installées' : 'Téléchargement');
   $('#dlSub').textContent = st.state === 'error'
     ? st.error
-    : st.state === 'done'
-      ? 'Tout est sur ton disque. Le jeu démarrera sans aller chercher ses modèles.'
+    : settled
+      ? `Tout est sur ton disque${st.skipped ? '' : ''}. Le jeu démarre sans aller chercher ses modèles sur le réseau.`
       : 'Les ressources du jeu sont copiées sur ton disque.';
 }
 
@@ -308,19 +317,43 @@ function watchInstall() {
   }, 400);
 }
 
-$('#install').onclick = async () => {
+async function startInstall() {
   const r = await bs.installStart();
   if (!r.ok) { $('#heroState').textContent = r.error || 'Installation impossible.'; return; }
   document.querySelector('.side button[data-tab="dl"]').click();
   watchInstall();
-};
+}
+$('#install').onclick = startInstall;
 $('#dlCancel').onclick = () => bs.installCancel();
+
+// Vérifier et réparer : la même passe que l'installation, mais tout ce qui est
+// déjà là à la bonne version est sauté — seuls les fichiers manquants ou
+// abîmés sont retéléchargés.
+$('#dlRepair').onclick = startInstall;
+
+$('#dlRemove').onclick = async () => {
+  const ok = await confirmBox('Supprimer les ressources',
+    'Les fichiers installés seront effacés. Le jeu continuera de fonctionner : il ira les chercher sur le réseau comme avant.',
+    'Supprimer');
+  if (!ok) return;
+  const r = await bs.installRemove();
+  if (!r.ok) { $('#frMsg').textContent = r.error; return; }
+  await refreshInstall();
+  paintDownload(await bs.installState());
+};
 
 // Choix du disque : l'explorateur de Windows s'ouvre, le launcher n'écrit que là.
 async function chooseDir() {
   const r = await bs.pickDir();
-  if (!r.ok) return false;
+  if (!r.ok) {
+    if (r.error) { $('#optMsg').className = 'msg err'; $('#optMsg').textContent = r.error; }
+    return false;
+  }
   await refreshInstall();
+  if (r.previous) {
+    $('#optMsg').className = 'msg';
+    $('#optMsg').textContent = `Nouveau dossier enregistré. L'ancien (${r.previous}) n'a pas été effacé : supprime-le à la main si tu veux récupérer la place.`;
+  }
   return true;
 }
 $('#installCog').onclick = chooseDir;
@@ -334,11 +367,19 @@ function friendRow(f) {
     <span class="grow"></span>
     <button data-rm="${esc(f.name)}">Retirer</button></div>`;
 }
+let frTimer = null;
 async function loadFriends() {
   if (!connected) return;
   const v = await bs.friends();
   if (v?.error) { $('#frList').innerHTML = `<p class="empty">${esc(v.error)}</p>`; return; }
   paintFriends(v);
+  // Tant que l'onglet est affiché, on rafraîchit : « en ville » doit être vrai
+  // maintenant, pas il y a dix minutes.
+  clearInterval(frTimer);
+  frTimer = setInterval(() => {
+    if (document.getElementById('tab-friends').style.display === 'none') { clearInterval(frTimer); frTimer = null; return; }
+    bs.friends().then(x => { if (!x?.error) paintFriends(x); }).catch(() => {});
+  }, 20000);
 }
 function paintFriends(v) {
   const reqs = v.requests || [], list = v.friends || [];
@@ -449,11 +490,33 @@ $('#uninstall').onclick = async () => {
   }
 };
 
+// ---- clavier ----
+// Entrée valide le formulaire affiché, Échap ferme la confirmation : une
+// interface où il faut viser le bouton à la souris est pénible.
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && $('#modal').classList.contains('on')) { closeModal(false); return; }
+  if (e.key !== 'Enter') return;
+  const inField = id => document.activeElement === $(id);
+  const visible = el => el && el.offsetParent !== null;
+  if (inField('#u') || inField('#p') || inField('#lc')) $('#login').click();
+  else if (inField('#su') || inField('#sp1') || inField('#sr')) $('#signup').click();
+  else if (inField('#se')) $('#sendCode').click();
+  else if (inField('#sc')) $('#signup').click();
+  else if (inField('#pn')) $('#pseudoGo').click();
+  else if (inField('#frName')) $('#frAdd').click();
+  else if ($('#modal').classList.contains('on')) $('#mYes').click();
+  else if (visible($('#playBox')) && connected) $('#play').click();
+});
+
 // ---- démarrage ----
 (async () => {
   settings = await bs.settings();
   $('#ram').value = settings.ramPercent;
   paintRam();
+  await refreshInstall();            // (dossier et état visibles même déconnecté)
   const acc = await bs.currentAccount();
   showAccount(acc);
+  const st = await bs.installState();
+  paintDownload(st);
+  if (st.state === 'download' || st.state === 'list') watchInstall();
 })();

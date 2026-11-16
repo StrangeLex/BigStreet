@@ -40,6 +40,13 @@ tout tient en 120 lignes et il est public.
 - **Aucune télémétrie**, aucune statistique d'usage, aucun traçage.
 - **Aucune collecte** de données personnelles. Il n'envoie rien nulle part,
   à part les requêtes vers le site du jeu et la vérification de version GitHub.
+- **Ton jeton de session est chiffré** par le coffre de Windows (DPAPI) dans
+  `settings.json`, et le fichier est écrit en lecture pour toi seul. Ton mot de
+  passe, lui, n'est jamais écrit nulle part.
+- **Un retour de connexion n'est accepté que s'il répond à une demande que tu
+  viens de faire** : le launcher tire un jeton à usage unique avant d'ouvrir ton
+  navigateur, et refuse tout lien `bigstreet://` qui ne le porte pas. Une page
+  web ne peut donc pas te connecter sur un compte qui n'est pas le tien.
 - **Aucun identifiant embarqué** : il ne contient ni clé, ni jeton, ni secret.
   Les mises à jour sont publiques et anonymes, vérifie-le toi-même.
 - **Aucun accès à tes fichiers**, hors son propre dossier d'installation et de
