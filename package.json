@@ -1,7 +1,7 @@
 {
   "name": "bigstreet-launcher",
   "productName": "Big Street",
-  "version": "1.5.5",
+  "version": "1.5.6",
   "description": "Launcher officiel de Big Street — ouvre le jeu dans une fenêtre native, se met à jour tout seul.",
   "main": "src/main.js",
   "author": "StrangeLex",

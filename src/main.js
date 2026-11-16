@@ -206,9 +206,15 @@ function createLauncher() {
   });
   Menu.setApplicationMenu(null);
   launcher.loadFile(path.join(__dirname, 'launcher.html'));
+  // (une seule fois : le filet des 17 s ne doit pas rouvrir le launcher par-dessus
+  // une partie deja lancee, ni apres que le joueur l'a range)
+  let revealed = false;
   const reveal = () => {
+    if (revealed) return;
+    revealed = true;
     if (splash && !splash.isDestroyed()) splash.destroy();
     if (HIDDEN_START) return;               // (demarrage avec Windows : il reste dans les icones cachees)
+    if (game && !game.isDestroyed()) return;
     if (launcher && !launcher.isDestroyed() && !launcher.isVisible()) launcher.show();
   };
   // La fenetre n'apparait que quand l'interface sait si le joueur est connecte
@@ -220,7 +226,8 @@ function createLauncher() {
   setTimeout(reveal, 17000);
   launcher.webContents.on('render-process-gone', (_e, d) => {
     log.error('interface interrompue : ' + d.reason);
-    reveal();
+    if (splash && !splash.isDestroyed()) splash.destroy();
+    if (!revealed) reveal();
   });
   // Fermer la fenetre la range dans les icones cachees : le launcher continue de
   // veiller aux demandes d'amis. « Quitter » (clic droit sur l'icone) l'arrete vraiment.
