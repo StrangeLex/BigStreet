@@ -16,3 +16,10 @@ contextBridge.exposeInMainWorld('__bsLauncher', {
   version: arg.slice('--bs-version='.length) || null,
   isLauncher: true,
 });
+
+// Mode d'affichage de la fenêtre de jeu (onglet Options > Graphismes du jeu) :
+// « windowed » (fenêtré) ou « fullscreen » (plein écran sans bordure). Rien d'autre.
+contextBridge.exposeInMainWorld('__bsDisplay', {
+  get: () => ipcRenderer.invoke('bs:display-get'),
+  set: mode => ipcRenderer.invoke('bs:display-set', mode),
+});

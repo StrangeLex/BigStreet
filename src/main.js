@@ -80,6 +80,8 @@ function readSettings() {
     authNonce: s.authNonce && typeof s.authNonce.value === 'string' ? s.authNonce : null,
     // (demarrage avec Windows, en arriere-plan : oui par defaut, decochable dans Options)
     autoStart: s.autoStart !== false, trayHint: !!s.trayHint,
+    // (fenetre de jeu : fenetre ou plein ecran sans bordure)
+    displayMode: s.displayMode === 'fullscreen' ? 'fullscreen' : 'windowed',
     // (demandes d'amis deja notifiees : pseudo -> jeton de la notification)
     friendNotified: Object.fromEntries(Object.entries(s.friendNotified && typeof s.friendNotified === 'object' ? s.friendNotified : {})
       .filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && /^[0-9a-f]{32}$/.test(v))) };
@@ -262,6 +264,7 @@ async function openGame() {
   game = new BrowserWindow({
     width: 1280, height: 800, minWidth: 1024, minHeight: 640,
     backgroundColor: '#0b0f17', show: false,
+    fullscreen: readSettings().displayMode === 'fullscreen',
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -269,6 +272,16 @@ async function openGame() {
       backgroundThrottling: false,
       additionalArguments: [`--bs-version=${app.getVersion()}`],
     },
+  });
+
+  // Mode d'affichage : retenu quand il change (option du jeu, F11, ou sortie du
+  // plein ecran par Windows), reapplique a la prochaine ouverture.
+  let closing = false;
+  game.on('close', () => { closing = true; });   // (fermer en plein ecran ne doit pas faire oublier le choix)
+  game.on('enter-full-screen', () => writeSettings({ displayMode: 'fullscreen' }));
+  game.on('leave-full-screen', () => { if (!closing) writeSettings({ displayMode: 'windowed' }); });
+  game.webContents.on('before-input-event', (e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F11' && !input.isAutoRepeat) { e.preventDefault(); game.setFullScreen(!game.isFullScreen()); }
   });
 
   // Le titre de la fenetre reste le nom du jeu, quoi qu'annonce la page web.
@@ -869,6 +882,15 @@ ipcMain.handle('bs:account', async () => {
     log.warn('vérification de session impossible : ' + e);
     return { offline: true };
   }
+});
+
+// Mode d'affichage demande par la page du jeu (Options > Graphismes).
+ipcMain.handle('bs:display-get', () => (game && !game.isDestroyed() ? (game.isFullScreen() ? 'fullscreen' : 'windowed') : readSettings().displayMode));
+ipcMain.handle('bs:display-set', (_e, mode) => {
+  const full = mode === 'fullscreen';
+  writeSettings({ displayMode: full ? 'fullscreen' : 'windowed' });
+  if (game && !game.isDestroyed()) game.setFullScreen(full);
+  return full ? 'fullscreen' : 'windowed';
 });
 
 ipcMain.handle('bs:play', async () => {
