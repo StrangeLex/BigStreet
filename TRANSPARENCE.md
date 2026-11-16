@@ -6,7 +6,11 @@ tout tient en 120 lignes et il est public.
 
 ## Ce que le launcher fait
 
-- Ouvre `https://playbigstreet.com/` dans une fenêtre Chromium (Electron).
+- Affiche un launcher où tu te connectes **ou crées ton compte Big Street**.
+  Pseudo, mot de passe, e-mail et code de parrainage partent directement au
+  site du jeu (`/api/login`, `/api/register`), à personne d'autre. Le mot de
+  passe n'est jamais écrit sur ton disque : seul le jeton de session l'est.
+- Ouvre ensuite `https://playbigstreet.com/` dans une fenêtre Chromium (Electron).
 - Affiche un écran de chargement pendant la connexion.
 - Renvoie les liens externes vers ton navigateur habituel.
 - Vérifie au démarrage s'il existe une version plus récente **du launcher**
@@ -30,6 +34,14 @@ tout tient en 120 lignes et il est public.
   `nodeIntegration: false`, `contextIsolation: true`).
 - Il **ne touche à rien d'autre** que son propre dossier. Seule l'application
   elle-meme est mise a jour, jamais le reste de ta machine.
+
+## Les personnages affichés
+
+Les personnages de l'écran d'accueil et du choix de départ ne sont pas des
+illustrations : ce sont de vrais avatars du jeu, rendus par le moteur du jeu
+lui-même (`tools/render-chars.mjs`), puis embarqués en images. Le personnage
+que tu choisis à l'inscription est exactement celui avec lequel tu arrives en
+ville — et tout reste modifiable ensuite, en jeu.
 
 ## Le jeu n'est pas dans le launcher
 

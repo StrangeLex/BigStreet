@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('bs', {
 
   login: (name, password) => ipcRenderer.invoke('bs:login', { name, password }),
   logout: () => ipcRenderer.invoke('bs:logout'),
+
+  registerMode: () => ipcRenderer.invoke('bs:register-mode'),
+  registerCode: (email, name) => ipcRenderer.invoke('bs:register-code', { email, name }),
+  register: form => ipcRenderer.invoke('bs:register', form),
   currentAccount: () => ipcRenderer.invoke('bs:account'),
   play: () => ipcRenderer.invoke('bs:play'),
 

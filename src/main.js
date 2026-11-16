@@ -64,6 +64,10 @@ function writeSettings(patch) {
 async function api(route, { method = 'GET', body, token } = {}) {
   const headers = { 'Accept': 'application/json' };
   if (body) headers['Content-Type'] = 'application/json';
+  // Le site refuse les POST sans en-tete Origin (protection anti-CSRF des
+  // navigateurs). fetch() cote Node n'en envoie pas : on le pose nous-memes,
+  // sinon connexion, inscription et deconnexion repondent « Origine refusee ».
+  if (method !== 'GET') headers['Origin'] = SITE;
   if (token) headers['Authorization'] = `Bearer ${token}`;
   const res = await fetch(`${SITE}/api/${route}`, {
     method, headers, body: body ? JSON.stringify(body) : undefined,
@@ -212,6 +216,39 @@ ipcMain.handle('bs:login', async (_e, { name, password }) => {
   } catch (e) {
     log.error('connexion : ' + e);
     return { ok: false, error: 'Serveur injoignable. Vérifie ta connexion.' };
+  }
+});
+
+// Inscription. Le site exige une adresse e-mail verifiee par code uniquement
+// quand un service d'envoi est configure : le launcher demande l'etat au site
+// plutot que de le supposer.
+ipcMain.handle('bs:register-mode', async () => {
+  try { const r = await api('register/email'); return { emailRequired: !!r?.required }; }
+  catch { return { emailRequired: false }; }
+});
+
+ipcMain.handle('bs:register-code', async (_e, { email, name }) => {
+  try {
+    const r = await api('register/code', { method: 'POST', body: { email, name } });
+    if (r?.error) return { ok: false, error: r.error };
+    return { ok: true, info: r?.info || 'Code envoye.' };
+  } catch (e) {
+    log.error('code e-mail : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
+  }
+});
+
+ipcMain.handle('bs:register', async (_e, { name, password, email, code, ref, look }) => {
+  try {
+    const r = await api('register', { method: 'POST', body: { name, password, email, code, ref, look } });
+    if (r?.error) return { ok: false, error: r.error };
+    if (!r?.token) return { ok: false, error: 'Reponse inattendue du serveur.' };
+    account = r.account || { name };
+    writeSettings({ token: r.token });
+    return { ok: true, account };
+  } catch (e) {
+    log.error('inscription : ' + e);
+    return { ok: false, error: 'Serveur injoignable. Verifie ta connexion.' };
   }
 });
 

@@ -13,12 +13,13 @@
     --bg:#ffffff; --ink:#15181f; --muted:#6b7280; --line:#e6e8ee;
     --hover:#f3f4f7; --soft:#f6f7f9; --field:#ffffff; --body:#374151;
     --accent:#ff24b6; --accent2:#22d3ee; --ok:#16a34a; --err:#dc2626;
+    --halo:.14;
   }
   @media (prefers-color-scheme: dark){
     :root{
       --bg:#14171d; --ink:#eef1f6; --muted:#9aa3b2; --line:#272c35;
       --hover:#1e222a; --soft:#1b1f26; --field:#1a1e25; --body:#c3cad6;
-      --ok:#4ade80; --err:#f87171;
+      --ok:#4ade80; --err:#f87171; --halo:.26;
     }
   }
   *{box-sizing:border-box}
@@ -50,7 +51,7 @@
   .hint{margin:0 0 16px;font-size:12.5px;color:var(--muted);line-height:1.5}
 
   label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:12px 0 5px}
-  input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--line);
+  input[type=text],input[type=password],input[type=email]{width:100%;padding:10px 12px;border:1px solid var(--line);
     border-radius:9px;font-family:inherit;font-size:13.5px;background:var(--field);color:var(--ink);user-select:text}
   input:focus{outline:none;border-color:var(--accent)}
   .cta{margin-top:16px;width:100%;border:none;border-radius:11px;padding:13px;cursor:pointer;
@@ -59,6 +60,38 @@
   .cta:disabled{opacity:.55;cursor:default}
   .msg{margin-top:10px;font-size:12.5px;min-height:17px}
   .msg.err{color:var(--err)} .msg.ok{color:var(--ok)}
+
+  /* ---- connexion / inscription : formulaire à gauche, personnages à droite ---- */
+  .auth{display:grid;grid-template-columns:minmax(0,1fr) 224px;gap:20px;align-items:start}
+  .seg{display:flex;gap:4px;background:var(--soft);border:1px solid var(--line);
+    border-radius:11px;padding:4px;margin-bottom:14px}
+  .seg button{flex:1;border:none;background:transparent;border-radius:8px;padding:8px 10px;cursor:pointer;
+    font-family:inherit;font-size:13px;font-weight:700;color:var(--muted)}
+  .seg button.on{background:var(--bg);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+
+  /* Décor : les personnages sont les vrais avatars du jeu, rendus par son moteur. */
+  .art{position:relative;isolation:isolate;height:336px;padding-bottom:22px;
+    display:flex;align-items:flex-end;justify-content:center}
+  .art::before{content:'';position:absolute;inset:auto 0 16% 0;height:70%;z-index:0;
+    background:radial-gradient(58% 50% at 50% 72%,var(--accent) 0%,transparent 70%);
+    opacity:var(--halo);filter:blur(6px)}
+  .art img{position:relative;z-index:2;height:100%;filter:drop-shadow(0 14px 18px rgba(0,0,0,.26))}
+  .art img#artA{transform:translateX(-24px)}
+  .art img.b{position:absolute;right:0;bottom:22px;z-index:1;height:70%;opacity:.92}
+  .art .cap{position:absolute;left:0;right:0;bottom:0;text-align:center;
+    font-size:11px;color:var(--muted)}
+
+  /* ---- choix du personnage de départ ---- */
+  .picks{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:6px}
+  .pick{border:1px solid var(--line);background:var(--soft);border-radius:11px;padding:8px 4px 6px;
+    cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px}
+  .pick img{height:74px;pointer-events:none}
+  .pick small{font-size:10.5px;color:var(--muted)}
+  .pick.on{border-color:var(--accent);background:color-mix(in srgb,var(--accent) 10%,var(--soft))}
+  .pick.on small{color:var(--ink);font-weight:700}
+
+  .inline{display:flex;gap:8px;align-items:flex-end}
+  .inline .cta{margin-top:0;width:auto;white-space:nowrap;padding:10px 14px;font-size:13px}
 
   .notes article{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-bottom:11px}
   .notes h3{margin:0 0 3px;font-size:14px}
@@ -89,27 +122,73 @@
     </nav>
 
     <section class="main">
-      <!-- ---------------- Connexion / Jouer ---------------- -->
+      <!-- ---------------- Connexion / Inscription / Jouer ---------------- -->
       <div id="tab-play">
-        <div id="loginBox">
-          <h2>Connexion</h2>
-          <p class="hint">Utilise ton compte Big Street. Pas encore de compte ?
-             Crée-le sur playbigstreet.com, puis reviens ici.</p>
-          <label for="u">Pseudo</label>
-          <input id="u" type="text" autocomplete="username" spellcheck="false">
-          <label for="p">Mot de passe</label>
-          <input id="p" type="password" autocomplete="current-password">
-          <button class="cta" id="login">Se connecter</button>
-          <div class="msg" id="loginMsg"></div>
+        <div id="authBox" class="auth">
+          <div>
+            <div class="seg">
+              <button id="tabLogin" class="on">Se connecter</button>
+              <button id="tabSignup">Créer un compte</button>
+            </div>
+
+            <!-- Connexion -->
+            <div id="loginBox">
+              <label for="u">Pseudo</label>
+              <input id="u" type="text" autocomplete="username" spellcheck="false" maxlength="16">
+              <label for="p">Mot de passe</label>
+              <input id="p" type="password" autocomplete="current-password">
+              <button class="cta" id="login">Se connecter</button>
+              <div class="msg" id="loginMsg"></div>
+            </div>
+
+            <!-- Inscription -->
+            <div id="signupBox" style="display:none">
+              <label for="su">Pseudo</label>
+              <input id="su" type="text" autocomplete="username" spellcheck="false" maxlength="16"
+                     placeholder="3 à 16 caractères">
+              <label for="sp1">Mot de passe</label>
+              <input id="sp1" type="password" autocomplete="new-password" placeholder="6 caractères minimum">
+
+              <div id="emailStep" style="display:none">
+                <label for="se">Adresse e-mail</label>
+                <div class="inline">
+                  <input id="se" type="email" autocomplete="email" spellcheck="false">
+                  <button class="cta" id="sendCode">Recevoir le code</button>
+                </div>
+                <label for="sc">Code reçu par e-mail</label>
+                <input id="sc" type="text" inputmode="numeric" maxlength="6" spellcheck="false" placeholder="6 chiffres">
+              </div>
+
+              <label>Ton personnage de départ</label>
+              <div class="picks" id="picks"></div>
+
+              <label for="sr">Code de parrainage <span style="font-weight:600">(facultatif)</span></label>
+              <input id="sr" type="text" spellcheck="false" maxlength="6" placeholder="ex. a1b2c3">
+
+              <button class="cta" id="signup">Créer mon compte</button>
+              <div class="msg" id="signupMsg"></div>
+            </div>
+          </div>
+
+          <div class="art">
+            <img id="artA" alt="">
+            <img id="artB" class="b" alt="">
+            <span class="cap" id="artCap">Tout se personnalise en jeu.</span>
+          </div>
         </div>
 
-        <div id="playBox" style="display:none">
-          <h2>Prêt à jouer</h2>
-          <p class="hint" id="playHint"></p>
-          <button class="cta" id="play">Lancer Big Street</button>
-          <button class="cta" id="logout"
-                  style="background:var(--hover);color:var(--ink);margin-top:9px">Se déconnecter</button>
-          <div class="msg" id="playMsg"></div>
+        <div id="playBox" style="display:none" class="auth">
+          <div>
+            <h2>Prêt à jouer</h2>
+            <p class="hint" id="playHint"></p>
+            <button class="cta" id="play">Lancer Big Street</button>
+            <button class="cta" id="logout"
+                    style="background:var(--hover);color:var(--ink);margin-top:9px">Se déconnecter</button>
+            <div class="msg" id="playMsg"></div>
+          </div>
+          <div class="art">
+            <img id="artC" alt="">
+          </div>
         </div>
       </div>
 
@@ -138,6 +217,7 @@
     </section>
   </div>
 
+  <script src="chars.js"></script>
   <script src="launcher.js"></script>
 </body>
 </html>
