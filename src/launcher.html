@@ -13,13 +13,13 @@
     --bg:#ffffff; --ink:#15181f; --muted:#6b7280; --line:#e6e8ee;
     --hover:#f3f4f7; --soft:#f6f7f9; --field:#ffffff; --body:#374151;
     --accent:#ff24b6; --accent2:#22d3ee; --ok:#16a34a; --err:#dc2626;
-    --halo:.14;
+    --halo:.14; --shade:rgba(0,0,0,.35);
   }
   @media (prefers-color-scheme: dark){
     :root{
       --bg:#14171d; --ink:#eef1f6; --muted:#9aa3b2; --line:#272c35;
       --hover:#1e222a; --soft:#1b1f26; --field:#1a1e25; --body:#c3cad6;
-      --ok:#4ade80; --err:#f87171; --halo:.26;
+      --ok:#4ade80; --err:#f87171; --halo:.26; --shade:rgba(0,0,0,.55);
     }
   }
   *{box-sizing:border-box}
@@ -37,16 +37,21 @@
   .bar button.x:hover{background:#dc2626;color:#fff}
 
   .body{height:calc(100% - 38px);display:flex}
-  .side{width:188px;border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:4px}
-  .side button{border:none;background:transparent;text-align:left;padding:10px 12px;border-radius:9px;
+  .side{width:188px;border-right:1px solid var(--line);padding:14px 10px 10px;
+    display:flex;flex-direction:column;gap:4px}
+  .side button[data-tab]{border:none;background:transparent;text-align:left;padding:10px 12px;border-radius:9px;
     cursor:pointer;font-family:inherit;font-size:13.5px;color:var(--muted);font-weight:600}
-  .side button:hover{background:var(--soft);color:var(--ink)}
-  .side button.on{background:var(--hover);color:var(--ink)}
+  .side button[data-tab]:hover{background:var(--soft);color:var(--ink)}
+  .side button[data-tab].on{background:var(--hover);color:var(--ink)}
+  .side .dot{float:right;width:7px;height:7px;border-radius:50%;background:var(--accent);margin-top:6px;display:none}
   .side .sp{flex:1}
-  .who{font-size:11.5px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
+  .who{font-size:11.5px;color:var(--muted);padding:8px 12px 10px;border-top:1px solid var(--line)}
   .who b{color:var(--ink);display:block;font-size:13px}
+  .side .out{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:9px;
+    padding:8px 12px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;text-align:left}
+  .side .out:hover{border-color:var(--err);color:var(--err)}
 
-  .main{flex:1;padding:20px 22px;overflow-y:auto}
+  .main{flex:1;padding:20px 22px;overflow-y:auto;position:relative}
   h2{margin:0 0 4px;font-size:17px}
   .hint{margin:0 0 16px;font-size:12.5px;color:var(--muted);line-height:1.5}
 
@@ -61,13 +66,23 @@
   .msg{margin-top:10px;font-size:12.5px;min-height:17px}
   .msg.err{color:var(--err)} .msg.ok{color:var(--ok)}
 
-  /* ---- connexion / inscription : formulaire à gauche, personnages à droite ---- */
+  /* ---- connexion / inscription ---- */
   .auth{display:grid;grid-template-columns:minmax(0,1fr) 224px;gap:20px;align-items:start}
   .seg{display:flex;gap:4px;background:var(--soft);border:1px solid var(--line);
     border-radius:11px;padding:4px;margin-bottom:14px}
   .seg button{flex:1;border:none;background:transparent;border-radius:8px;padding:8px 10px;cursor:pointer;
     font-family:inherit;font-size:13px;font-weight:700;color:var(--muted)}
   .seg button.on{background:var(--bg);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+  .prov{display:flex;flex-direction:column;gap:8px}
+  .prov button{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;
+    border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:10px;
+    padding:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700}
+  .prov button:hover{background:var(--hover)}
+  .prov button .g{width:16px;height:16px;display:inline-block;border-radius:50%;
+    background:conic-gradient(#ea4335 0 25%,#fbbc05 0 50%,#34a853 0 75%,#4285f4 0)}
+  .prov button .t{width:16px;height:16px;display:inline-block;border-radius:3px;background:#9146ff}
+  .or{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--muted);font-size:11.5px}
+  .or::before,.or::after{content:'';flex:1;height:1px;background:var(--line)}
 
   /* Décor : les personnages sont les vrais avatars du jeu, rendus par son moteur. */
   .art{position:relative;isolation:isolate;height:336px;padding-bottom:22px;
@@ -81,20 +96,56 @@
   .art .cap{position:absolute;left:0;right:0;bottom:0;text-align:center;
     font-size:11px;color:var(--muted)}
 
-  /* ---- connexion par Google / Twitch ---- */
-  .prov{display:flex;flex-direction:column;gap:8px}
-  .prov button{display:flex;align-items:center;justify-content:center;gap:9px;width:100%;
-    border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:10px;
-    padding:11px;cursor:pointer;font-family:inherit;font-size:13.5px;font-weight:700}
-  .prov button:hover{background:var(--hover)}
-  .prov button .g{width:16px;height:16px;display:inline-block;border-radius:50%;
-    background:conic-gradient(#ea4335 0 25%,#fbbc05 0 50%,#34a853 0 75%,#4285f4 0)}
-  .prov button .t{width:16px;height:16px;display:inline-block;border-radius:3px;background:#9146ff}
-  .or{display:flex;align-items:center;gap:10px;margin:14px 0 2px;color:var(--muted);font-size:11.5px}
-  .or::before,.or::after{content:'';flex:1;height:1px;background:var(--line)}
-
   .inline{display:flex;gap:8px;align-items:flex-end}
   .inline .cta{margin-top:0;width:auto;white-space:nowrap;padding:10px 14px;font-size:13px}
+
+  /* ---- écran de lancement : un vrai décor du jeu ---- */
+  .hero{position:absolute;inset:0;overflow:hidden}
+  .hero .bgimg{position:absolute;inset:0;background-size:cover;background-position:center 38%;
+    transform:scale(1.04)}
+  .hero .veil{position:absolute;inset:0;background:linear-gradient(180deg,
+    rgba(0,0,0,.42) 0%,transparent 20%,transparent 34%,rgba(0,0,0,.55) 62%,rgba(0,0,0,.92) 100%)}
+  .hero .in{position:absolute;inset:auto 0 0 0;padding:18px 22px;display:flex;align-items:flex-end;gap:14px}
+  .hero h1{margin:0;font-size:25px;letter-spacing:1px;white-space:nowrap;color:#fff;
+    text-shadow:0 2px 12px rgba(0,0,0,.7)}
+  .hero .who2{margin:4px 0 0;font-size:12.5px;color:rgba(255,255,255,.8);text-shadow:0 1px 8px rgba(0,0,0,.7)}
+  .hero .grow{flex:1}
+  .hero .acts{display:flex;align-items:center;gap:9px}
+  .hero .acts .cta{margin:0;width:auto;padding:12px 20px;font-size:13.5px;white-space:nowrap}
+  .hero .cog{width:42px;height:42px;flex:none;border-radius:11px;border:1px solid rgba(255,255,255,.35);
+    background:rgba(0,0,0,.38);color:#fff;cursor:pointer;font-size:16px;line-height:1}
+  .hero .cog:hover{background:rgba(0,0,0,.6)}
+  .hero .state{position:absolute;left:22px;right:22px;bottom:98px;font-size:12px;
+    color:rgba(255,255,255,.88);text-shadow:0 1px 8px rgba(0,0,0,.85)}
+  .hero .mini{position:absolute;left:22px;right:22px;bottom:88px;height:6px;border-radius:4px;
+    background:rgba(255,255,255,.22);overflow:hidden;display:none}
+  .hero .mini i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent))}
+
+  /* ---- amis ---- */
+  .flist{display:flex;flex-direction:column;gap:7px;margin-top:4px}
+  .fr{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:10px 13px}
+  .fr .pt{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+  .fr.on .pt{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 25%,transparent)}
+  .fr b{font-size:13.5px}
+  .fr small{color:var(--muted);font-size:11.5px;display:block}
+  .fr .grow{flex:1}
+  .fr button{border:1px solid var(--line);background:transparent;color:var(--muted);border-radius:8px;
+    padding:6px 11px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700}
+  .fr button:hover{color:var(--ink);background:var(--hover)}
+  .fr button.yes{border-color:var(--ok);color:var(--ok)}
+  .fr button.no{border-color:var(--err);color:var(--err)}
+  .empty{font-size:12.5px;color:var(--muted);padding:6px 2px}
+
+  /* ---- téléchargement ---- */
+  .barbg{height:12px;border-radius:7px;background:var(--soft);border:1px solid var(--line);
+    overflow:hidden;margin:4px 0 10px}
+  .barbg i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));
+    transition:width .25s}
+  .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:14px}
+  .stat{border:1px solid var(--line);border-radius:11px;padding:11px 13px}
+  .stat small{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}
+  .stat b{font-size:15px}
+  .path{font-size:11.5px;color:var(--muted);word-break:break-all;margin-top:12px;user-select:text}
 
   .notes article{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-bottom:11px}
   .notes h3{margin:0 0 3px;font-size:14px}
@@ -115,6 +166,20 @@
   .danger{margin-top:14px;border:1px solid var(--err);background:transparent;color:var(--err);
     border-radius:10px;padding:10px 14px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700}
   .danger:hover{background:color-mix(in srgb,var(--err) 12%,transparent)}
+
+  /* ---- fenêtre de confirmation ---- */
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;
+    align-items:center;justify-content:center;z-index:50}
+  .modal.on{display:flex}
+  .card{width:340px;background:var(--bg);border:1px solid var(--line);border-radius:14px;
+    padding:20px 22px;box-shadow:0 18px 40px rgba(0,0,0,.3)}
+  .card h3{margin:0 0 6px;font-size:16px}
+  .card p{margin:0 0 16px;font-size:13px;color:var(--muted);line-height:1.55}
+  .card .acts{display:flex;gap:9px}
+  .card button{flex:1;border-radius:10px;padding:11px;cursor:pointer;font-family:inherit;
+    font-size:13.5px;font-weight:700;border:1px solid var(--line);background:transparent;color:var(--ink)}
+  .card button:hover{background:var(--hover)}
+  .card button.go{border:none;color:#fff;background:linear-gradient(135deg,var(--accent2),var(--accent))}
 </style>
 </head>
 <body>
@@ -128,10 +193,13 @@
   <div class="body">
     <nav class="side">
       <button data-tab="play" class="on">Jouer</button>
+      <button data-tab="friends" id="tabFriends" style="display:none">Amis<i class="dot" id="frDot"></i></button>
       <button data-tab="notes">Nouveautés</button>
+      <button data-tab="dl" id="tabDl" style="display:none">Téléchargement</button>
       <button data-tab="opt">Options</button>
       <span class="sp"></span>
       <div class="who" id="who"><b>Non connecté</b>Connecte-toi pour jouer</div>
+      <button class="out" id="logout" style="display:none">Se déconnecter</button>
     </nav>
 
     <section class="main">
@@ -144,7 +212,6 @@
               <button id="tabSignup">Créer un compte</button>
             </div>
 
-            <!-- Google / Twitch : commun aux deux onglets -->
             <div class="prov" id="prov">
               <button id="provGoogle"><i class="g"></i>Continuer avec Google</button>
               <button id="provTwitch"><i class="t"></i>Continuer avec Twitch</button>
@@ -211,27 +278,70 @@
             <span class="cap" id="artCap">Tout se personnalise en jeu.</span>
           </div>
         </div>
+      </div>
 
-        <div id="playBox" style="display:none" class="auth">
+      <!-- Écran de lancement (connecté) -->
+      <div id="playBox" class="hero" style="display:none">
+        <div class="bgimg" id="heroBg"></div>
+        <div class="veil"></div>
+        <div class="state" id="heroState"></div>
+        <div class="mini" id="heroMini"><i></i></div>
+        <div class="in">
           <div>
-            <h2>Prêt à jouer</h2>
-            <p class="hint" id="playHint"></p>
-            <button class="cta" id="play">Lancer Big Street</button>
-            <button class="cta" id="logout"
-                    style="background:var(--hover);color:var(--ink);margin-top:9px">Se déconnecter</button>
-            <div class="msg" id="playMsg"></div>
+            <h1>BIG STREET</h1>
+            <p class="who2" id="playHint"></p>
           </div>
-          <div class="art">
-            <img id="artC" alt="">
+          <span class="grow"></span>
+          <div class="acts">
+            <button class="cog" id="installCog" title="Dossier d'installation">⚙</button>
+            <button class="cta" id="install"
+                    style="background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.35)">Installer le jeu</button>
+            <button class="cta" id="play">Lancer Big Street</button>
           </div>
         </div>
       </div>
 
-      <!-- ---------------- Notes de version ---------------- -->
+      <!-- ---------------- Amis ---------------- -->
+      <div id="tab-friends" style="display:none">
+        <h2>Amis</h2>
+        <p class="hint">Qui est en ville, et sur quel serveur.</p>
+        <div class="inline">
+          <input id="frName" type="text" spellcheck="false" maxlength="16" placeholder="Pseudo à ajouter">
+          <button class="cta" id="frAdd">Ajouter</button>
+        </div>
+        <div class="msg" id="frMsg"></div>
+        <div id="frReqWrap" style="display:none">
+          <label>Demandes reçues</label>
+          <div class="flist" id="frReq"></div>
+        </div>
+        <label>Mes amis</label>
+        <div class="flist" id="frList"></div>
+      </div>
+
+      <!-- ---------------- Nouveautés ---------------- -->
       <div id="tab-notes" style="display:none">
         <h2>Nouveautés</h2>
         <p class="hint">Les dernières versions du launcher et du jeu.</p>
         <div class="notes" id="notes">Chargement…</div>
+      </div>
+
+      <!-- ---------------- Téléchargement ---------------- -->
+      <div id="tab-dl" style="display:none">
+        <h2 id="dlTitle">Téléchargement</h2>
+        <p class="hint" id="dlSub">Les ressources du jeu sont copiées sur ton disque.</p>
+        <div class="barbg"><i id="dlBar"></i></div>
+        <div class="row" style="justify-content:space-between">
+          <b id="dlPct" style="font-size:15px">0 %</b>
+          <span class="note" id="dlAmount" style="margin:0"></span>
+        </div>
+        <div class="stats">
+          <div class="stat"><small>Débit actuel</small><b id="dlSpeed">—</b></div>
+          <div class="stat"><small>Débit maximum</small><b id="dlMax">—</b></div>
+          <div class="stat"><small>Temps restant</small><b id="dlEta">—</b></div>
+          <div class="stat"><small>Fichiers</small><b id="dlFiles">—</b></div>
+        </div>
+        <p class="path" id="dlPath"></p>
+        <button class="danger" id="dlCancel" style="display:none">Arrêter le téléchargement</button>
       </div>
 
       <!-- ---------------- Options ---------------- -->
@@ -249,6 +359,13 @@
         <button class="cta" id="save" style="max-width:200px">Enregistrer</button>
         <div class="msg" id="optMsg"></div>
 
+        <label>Dossier d'installation du jeu</label>
+        <div class="inline">
+          <input id="optDir" type="text" spellcheck="false" readonly>
+          <button class="cta" id="optPick">Changer</button>
+        </div>
+        <p class="note" id="optDirNote"></p>
+
         <div class="about">
           <h3>À propos du launcher</h3>
           <dl>
@@ -264,7 +381,20 @@
     </section>
   </div>
 
+  <!-- fenêtre de confirmation -->
+  <div class="modal" id="modal">
+    <div class="card">
+      <h3 id="mTitle">Confirmer</h3>
+      <p id="mText"></p>
+      <div class="acts">
+        <button id="mNo">Annuler</button>
+        <button class="go" id="mYes">Confirmer</button>
+      </div>
+    </div>
+  </div>
+
   <script src="chars.js"></script>
+  <script src="bg.js"></script>
   <script src="launcher.js"></script>
 </body>
 </html>

@@ -56,6 +56,21 @@ lui-même (`tools/render-chars.mjs`), puis embarqués en images. Le personnage
 que tu choisis à l'inscription est exactement celui avec lequel tu arrives en
 ville — et tout reste modifiable ensuite, en jeu.
 
+## « Installer le jeu »
+
+Big Street se joue sur le serveur : il n'y a pas d'exécutable de jeu à poser sur
+ton disque. Ce que le bouton **Installer le jeu** télécharge, ce sont ses
+**ressources** — environ 1 670 modèles 3D et les données de la ville, ~69 Mo —
+que le jeu allait chercher au fil de la partie. Tu choisis le disque et le
+dossier ; rien n'est écrit ailleurs.
+
+Ensuite, le launcher sert ces fichiers depuis ton disque au lieu du réseau,
+**à condition que leur empreinte corresponde** à celle que le site annonce. Dès
+qu'une ressource change côté serveur, c'est la version du serveur qui est
+utilisée : une copie locale périmée ne peut pas te faire jouer avec un vieux
+contenu. Tu peux supprimer ce dossier à tout moment, le jeu retombera
+simplement sur le réseau.
+
 ## Le jeu n'est pas dans le launcher
 
 Le launcher pèse ~78 Mo mais **ne contient pas le jeu** : c'est le poids

@@ -32,6 +32,17 @@ contextBridge.exposeInMainWorld('bs', {
   notes: () => ipcRenderer.invoke('bs:notes'),
   settings: () => ipcRenderer.invoke('bs:settings'),
   saveSettings: s => ipcRenderer.invoke('bs:save-settings', s),
+  // Installation des ressources du jeu
+  installInfo: () => ipcRenderer.invoke('bs:install-info'),
+  pickDir: () => ipcRenderer.invoke('bs:pick-dir'),
+  installStart: dir => ipcRenderer.invoke('bs:install-start', dir),
+  installCancel: () => ipcRenderer.invoke('bs:install-cancel'),
+  installState: () => ipcRenderer.invoke('bs:install-state'),
+
+  // Amis
+  friends: () => ipcRenderer.invoke('bs:friends'),
+  friendAction: (action, name) => ipcRenderer.invoke('bs:friend-action', { action, name }),
+
   version: () => ipcRenderer.invoke('bs:version'),
   uninstall: () => ipcRenderer.invoke('bs:uninstall'),
 });

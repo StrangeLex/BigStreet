@@ -12,7 +12,7 @@
  * Le launcher n'embarque pas le jeu : il ouvre playbigstreet.com. Le contenu
  * se met donc à jour côté serveur, sans rien réinstaller.
  */
-const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const path = require('node:path');
@@ -49,7 +49,8 @@ function readSettings() {
   try { s = JSON.parse(fs.readFileSync(SETTINGS_FILE(), 'utf8')); } catch {}
   // Par défaut, le jeu peut utiliser la moitié de la mémoire de la machine.
   const pct = Math.min(90, Math.max(10, Number(s.ramPercent) || 50));
-  return { ramPercent: pct, token: typeof s.token === 'string' ? s.token : '' };
+  return { ramPercent: pct, token: typeof s.token === 'string' ? s.token : '',
+    installDir: typeof s.installDir === 'string' ? s.installDir : '' };
 }
 function writeSettings(patch) {
   const next = { ...readSettings(), ...patch };
@@ -168,6 +169,8 @@ async function openGame() {
     },
   });
 
+  serveLocalAssets(game.webContents.session);
+
   // Le jeton obtenu dans le launcher est déposé là où le client web le lit,
   // avant tout chargement : le joueur arrive déjà connecté.
   // On pose le jeton AVANT le premier rendu du document : le client web le lit
@@ -241,6 +244,113 @@ async function handleAuthLink(raw) {
     if (pending) return send({ ok: true, provider, pending, suggest: q.get('name') || '' });
   }
   send({ ok: false, error: 'Reponse inattendue du site.' });
+}
+
+// ------------------------------------------------- Installation des ressources
+/**
+ * « Installer le jeu » = telecharger ses ressources (modeles 3D et donnees,
+ * ~69 Mo) sur le disque choisi. Le jeu lui-meme reste servi par le site : ce
+ * qu'on installe, ce sont les fichiers lourds qu'il allait chercher a chaque
+ * partie. Ils sont ensuite servis depuis le disque (voir serveLocalAssets).
+ */
+const defaultInstallDir = () => path.join(app.getPath('userData'), 'jeu');
+const installDir = () => readSettings().installDir || defaultInstallDir();
+const manifestFile = dir => path.join(dir, 'manifest.json');
+
+function readManifest(dir = installDir()) {
+  try {
+    const m = JSON.parse(fs.readFileSync(manifestFile(dir), 'utf8'));
+    return m && m.files ? m : null;
+  } catch { return null; }
+}
+
+// Etat du telechargement, lu par la page « Telechargement » (debit, reste, etc.)
+let dl = { state: 'idle', done: 0, total: 0, files: 0, count: 0, speed: 0, maxSpeed: 0, eta: 0, error: '' };
+const MIME = { '.json': 'application/json', '.bbmodel': 'application/json', '.glb': 'model/gltf-binary',
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.webp': 'image/webp' };
+
+async function runInstall(dir) {
+  dl = { state: 'list', done: 0, total: 0, files: 0, count: 0, speed: 0, maxSpeed: 0, eta: 0, error: '' };
+  try {
+    const list = await api('assets');
+    if (!Array.isArray(list?.files) || !list.files.length) throw new Error('liste de ressources vide');
+    dl.total = list.total; dl.count = list.files.length; dl.state = 'download';
+
+    fs.mkdirSync(dir, { recursive: true });
+    const versions = {};
+    // Debit : mesure sur une fenetre glissante d'environ 3 s, pour une valeur
+    // stable a l'affichage sans lisser au point de ne plus rien dire.
+    let windowBytes = 0, windowStart = Date.now();
+    const bump = n => {
+      dl.done += n; windowBytes += n;
+      const dt = (Date.now() - windowStart) / 1000;
+      if (dt >= 0.5) {
+        dl.speed = windowBytes / dt;
+        dl.maxSpeed = Math.max(dl.maxSpeed, dl.speed);
+        if (dt > 3) { windowBytes = 0; windowStart = Date.now(); }
+        dl.eta = dl.speed > 0 ? Math.max(0, Math.round((dl.total - dl.done) / dl.speed)) : 0;
+      }
+    };
+
+    const queue = list.files.slice();
+    const worker = async () => {
+      while (queue.length) {
+        if (dl.state === 'cancel') return;
+        const f = queue.shift();
+        const dest = path.join(dir, f.p.replace(/^\//, ''));
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        const url = `${SITE}${f.p}${f.v ? `?v=${encodeURIComponent(f.v)}` : ''}`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`${f.p} : ${res.status}`);
+        const buf = Buffer.from(await res.arrayBuffer());
+        fs.writeFileSync(dest, buf);
+        versions[f.p] = f.v || '';
+        dl.files++; bump(buf.length);
+      }
+    };
+    await Promise.all(Array.from({ length: 6 }, worker));
+    if (dl.state === 'cancel') { dl.state = 'idle'; return; }
+
+    fs.writeFileSync(manifestFile(dir), JSON.stringify({ at: Date.now(), site: SITE, files: versions }));
+    writeSettings({ installDir: dir });
+    dl.state = 'done'; dl.speed = 0; dl.eta = 0;
+    log.info(`ressources installees dans ${dir} (${dl.files} fichiers)`);
+  } catch (e) {
+    log.error('installation : ' + e);
+    dl.state = 'error'; dl.error = String(e?.message || e);
+  }
+}
+
+/**
+ * Sert les ressources deja telechargees a la fenetre de jeu. Un fichier n'est
+ * servi localement que si son empreinte correspond a celle demandee : des que
+ * le site publie une nouvelle version, c'est le reseau qui repond, et la copie
+ * locale ne peut pas faire jouer avec un vieux contenu.
+ */
+function serveLocalAssets(session) {
+  const man = readManifest();
+  if (!man || session.__bsAssets) return;
+  session.__bsAssets = true;
+  const dir = installDir();
+  session.protocol.handle('https', req => {
+    try {
+      const u = new URL(req.url);
+      if (`${u.protocol}//${u.host}` === SITE && req.method === 'GET') {
+        const v = man.files[u.pathname];
+        const want = u.searchParams.get('v') || '';
+        if (v !== undefined && (!want || want === v)) {
+          const file = path.join(dir, u.pathname.replace(/^\//, ''));
+          if (fs.existsSync(file)) {
+            return new Response(fs.readFileSync(file), {
+              headers: { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' },
+            });
+          }
+        }
+      }
+    } catch { /* au moindre doute : le reseau */ }
+    return net.fetch(req, { bypassCustomProtocolHandlers: true });
+  });
+  log.info(`ressources locales servies depuis ${dir}`);
 }
 
 // ------------------------------------------------------------------- Ponts
@@ -395,6 +505,62 @@ ipcMain.handle('bs:refresh-game', async () => {
   try { await game.webContents.session.clearCache(); } catch {}
   game.loadURL(`${SITE}/`);
   return { ok: true };
+});
+
+// --- installation du jeu ---
+ipcMain.handle('bs:install-info', () => {
+  const dir = installDir();
+  const man = readManifest(dir);
+  return {
+    dir, custom: !!readSettings().installDir, defaultDir: defaultInstallDir(),
+    installed: !!man, files: man ? Object.keys(man.files).length : 0,
+    at: man?.at || 0,
+  };
+});
+
+// Choix du disque / dossier : c'est l'explorateur de Windows qui s'ouvre, le
+// launcher n'ecrit que la ou le joueur a dit.
+ipcMain.handle('bs:pick-dir', async () => {
+  const win = launcher && !launcher.isDestroyed() ? launcher : undefined;
+  const r = await dialog.showOpenDialog(win, {
+    title: 'Ou installer les ressources de Big Street ?',
+    defaultPath: installDir(),
+    properties: ['openDirectory', 'createDirectory'],
+    buttonLabel: 'Installer ici',
+  });
+  if (r.canceled || !r.filePaths?.[0]) return { ok: false };
+  const dir = path.join(r.filePaths[0], 'Big Street');
+  writeSettings({ installDir: dir });
+  return { ok: true, dir };
+});
+
+ipcMain.handle('bs:install-start', async (_e, dir) => {
+  if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Telechargement deja en cours.' };
+  const target = dir || installDir();
+  runInstall(target);               // (en tache de fond : l'interface suit l'etat)
+  return { ok: true, dir: target };
+});
+ipcMain.handle('bs:install-cancel', () => { if (dl.state === 'download') dl.state = 'cancel'; return { ok: true }; });
+ipcMain.handle('bs:install-state', () => dl);
+
+// --- amis ---
+ipcMain.handle('bs:friends', async () => {
+  const { token } = readSettings();
+  if (!token) return { error: 'Connexion requise.' };
+  try { return await api('friends', { token }); }
+  catch (e) { log.error('amis : ' + e); return { error: 'Serveur injoignable.' }; }
+});
+ipcMain.handle('bs:friend-action', async (_e, { action, name }) => {
+  const { token } = readSettings();
+  if (!token) return { ok: false, error: 'Connexion requise.' };
+  const route = { add: 'friends/request', respond: 'friends/respond', remove: 'friends/remove' }[action];
+  if (!route) return { ok: false, error: 'Action inconnue.' };
+  try {
+    const body = action === 'respond' ? { name: name.name, accept: name.accept } : { name };
+    const r = await api(route, { method: 'POST', body, token });
+    if (r?.error) return { ok: false, error: r.error };
+    return { ok: true, ...r };
+  } catch (e) { log.error('amis : ' + e); return { ok: false, error: 'Serveur injoignable.' }; }
 });
 
 ipcMain.handle('bs:settings', () => ({ ...readSettings(), totalMb: TOTAL_MB, token: undefined }));

@@ -13,18 +13,35 @@ $('#close').onclick = () => bs.close();
 document.querySelectorAll('.side button[data-tab]').forEach(b => {
   b.onclick = () => {
     document.querySelectorAll('.side button[data-tab]').forEach(x => x.classList.toggle('on', x === b));
-    for (const t of ['play', 'notes', 'opt']) {
+    for (const t of ['play', 'friends', 'notes', 'dl', 'opt']) {
       document.getElementById('tab-' + t).style.display = (t === b.dataset.tab) ? '' : 'none';
     }
+    // L'écran de lancement est en calque plein cadre : il ne s'affiche qu'avec l'onglet Jouer.
+    $('#playBox').style.display = (b.dataset.tab === 'play' && connected) ? '' : 'none';
     if (b.dataset.tab === 'notes') loadNotes();
-    if (b.dataset.tab === 'opt') loadVersion();
+    if (b.dataset.tab === 'opt') { loadVersion(); paintDir(); }
+    if (b.dataset.tab === 'friends') loadFriends();
   };
 });
 
-// ---- décor : personnages du jeu (src/chars.js) ----
+// ---- décor : personnages et ville du jeu (src/chars.js, src/bg.js) ----
 $('#artA').src = CHARS.hero1;
 $('#artB').src = CHARS.hero2;
-$('#artC').src = CHARS.hero3;
+$('#heroBg').style.backgroundImage = `url(${BG})`;
+
+// ---- petite fenêtre de confirmation ----
+let modalYes = null;
+function confirmBox(title, text, go = 'Confirmer') {
+  $('#mTitle').textContent = title;
+  $('#mText').textContent = text;
+  $('#mYes').textContent = go;
+  $('#modal').classList.add('on');
+  return new Promise(res => { modalYes = res; });
+}
+const closeModal = v => { $('#modal').classList.remove('on'); modalYes?.(v); modalYes = null; };
+$('#mNo').onclick = () => closeModal(false);
+$('#mYes').onclick = () => closeModal(true);
+$('#modal').onclick = e => { if (e.target === $('#modal')) closeModal(false); };
 
 // ---- bascule connexion / inscription ----
 let emailAsked = false;
@@ -49,15 +66,22 @@ $('#tabLogin').onclick = () => authMode(false);
 $('#tabSignup').onclick = () => authMode(true);
 
 // ---- compte connecté ----
+let connected = false;
 function showAccount(acc) {
-  const on = !!acc;
+  const on = connected = !!acc;
   $('#authBox').style.display = on ? 'none' : '';
-  $('#playBox').style.display = on ? '' : 'none';
+  const playTab = document.querySelector('.side button[data-tab="play"]').classList.contains('on');
+  $('#playBox').style.display = (on && playTab) ? '' : 'none';
   $('#who').innerHTML = on
     ? `<b>${esc(acc.name)}</b>Connecté`
     : '<b>Non connecté</b>Connecte-toi pour jouer';
-  if (on) $('#playHint').textContent =
-    `Tu es connecté en tant que ${acc.name}. Le jeu s'ouvrira dans une nouvelle fenêtre.`;
+  $('#logout').style.display = on ? '' : 'none';
+  $('#tabFriends').style.display = on ? '' : 'none';
+  if (on) {
+    $('#playHint').textContent = `Connecté en tant que ${acc.name}`;
+    refreshInstall();
+    loadFriends();
+  }
 }
 
 // ---- connexion ----
@@ -188,7 +212,15 @@ $('#pseudoGo').onclick = async () => {
 };
 
 // ---- jouer / déconnexion ----
-$('#logout').onclick = async () => { await bs.logout(); showAccount(null); authMode(false); };
+$('#logout').onclick = async () => {
+  const ok = await confirmBox('Se déconnecter',
+    'Tu devras entrer tes identifiants au prochain lancement. Ta progression reste intacte : elle est sur le serveur.',
+    'Se déconnecter');
+  if (!ok) return;
+  await bs.logout();
+  showAccount(null);
+  authMode(false);
+};
 
 $('#play').onclick = async () => {
   const msg = $('#playMsg');
@@ -197,6 +229,155 @@ $('#play').onclick = async () => {
   $('#play').disabled = false;
   if (!r.ok) { msg.className = 'msg err'; msg.textContent = r.error || 'Lancement impossible.'; return; }
   msg.textContent = '';
+};
+
+// ---- installation des ressources du jeu ----
+// « Installer le jeu », c'est copier sur le disque les modèles 3D et les
+// données que le jeu va chercher à chaque partie (~69 Mo). Le launcher les
+// sert ensuite lui-même : plus rien à télécharger en jouant.
+const Mo = n => `${(n / 1048576).toFixed(1)} Mo`;
+const debit = n => (n >= 1048576 ? `${(n / 1048576).toFixed(1)} Mo/s` : `${Math.round(n / 1024)} Ko/s`);
+const duree = sec => {
+  if (!sec) return '—';
+  const m = Math.floor(sec / 60), r = Math.round(sec % 60);
+  return m ? `${m} min ${String(r).padStart(2, '0')} s` : `${r} s`;
+};
+
+let install = null, dlTimer = null;
+
+async function refreshInstall() {
+  install = await bs.installInfo();
+  $('#optDir').value = install.dir;
+  $('#optDirNote').textContent = install.installed
+    ? `${install.files} fichiers installés. Changer de dossier demandera un nouveau téléchargement.`
+    : 'Les ressources ne sont pas encore installées.';
+  paintHero();
+}
+const paintDir = () => { if (install) $('#optDir').value = install.dir; };
+
+function paintHero(st) {
+  const busy = st && (st.state === 'list' || st.state === 'download');
+  $('#tabDl').style.display = (busy || st?.state === 'done' || install?.installed) ? '' : 'none';
+  $('#install').style.display = install?.installed && !busy ? 'none' : '';
+  $('#install').disabled = !!busy;
+  $('#install').textContent = busy ? 'Installation…' : 'Installer le jeu';
+  $('#heroMini').style.display = busy ? '' : 'none';
+  if (busy && st.total) {
+    const pct = Math.min(100, st.done / st.total * 100);
+    $('#heroMini').firstElementChild.style.width = pct + '%';
+    $('#heroState').textContent =
+      `Installation ${Math.floor(pct)} % — ${debit(st.speed)} — reste ${duree(st.eta)}`;
+  } else if (install?.installed) {
+    $('#heroState').textContent = `Ressources installées (${install.files} fichiers) — le jeu démarre sans rien télécharger.`;
+  } else {
+    $('#heroState').textContent = 'Le jeu se joue directement. L\u2019installation met ses ressources sur ton disque : démarrage plus rapide.';
+  }
+}
+
+function paintDownload(st) {
+  const pct = st.total ? Math.min(100, st.done / st.total * 100) : 0;
+  $('#dlBar').style.width = pct + '%';
+  $('#dlPct').textContent = `${Math.floor(pct)} %`;
+  $('#dlAmount').textContent = st.total ? `${Mo(st.done)} sur ${Mo(st.total)}` : '';
+  $('#dlSpeed').textContent = st.state === 'download' ? debit(st.speed) : '—';
+  $('#dlMax').textContent = st.maxSpeed ? debit(st.maxSpeed) : '—';
+  $('#dlEta').textContent = st.state === 'download' ? duree(st.eta) : '—';
+  $('#dlFiles').textContent = st.count ? `${st.files} / ${st.count}` : '—';
+  $('#dlPath').textContent = install ? `Dossier : ${install.dir}` : '';
+  $('#dlCancel').style.display = st.state === 'download' ? '' : 'none';
+  const title = { list: 'Préparation…', download: 'Téléchargement en cours',
+    done: 'Installation terminée', error: 'Téléchargement interrompu' }[st.state] || 'Téléchargement';
+  $('#dlTitle').textContent = title;
+  $('#dlSub').textContent = st.state === 'error'
+    ? st.error
+    : st.state === 'done'
+      ? 'Tout est sur ton disque. Le jeu démarrera sans aller chercher ses modèles.'
+      : 'Les ressources du jeu sont copiées sur ton disque.';
+}
+
+function watchInstall() {
+  clearInterval(dlTimer);
+  dlTimer = setInterval(async () => {
+    const st = await bs.installState();
+    paintDownload(st);
+    paintHero(st);
+    if (st.state !== 'download' && st.state !== 'list') {
+      clearInterval(dlTimer); dlTimer = null;
+      if (st.state === 'done') refreshInstall();
+    }
+  }, 400);
+}
+
+$('#install').onclick = async () => {
+  const r = await bs.installStart();
+  if (!r.ok) { $('#heroState').textContent = r.error || 'Installation impossible.'; return; }
+  document.querySelector('.side button[data-tab="dl"]').click();
+  watchInstall();
+};
+$('#dlCancel').onclick = () => bs.installCancel();
+
+// Choix du disque : l'explorateur de Windows s'ouvre, le launcher n'écrit que là.
+async function chooseDir() {
+  const r = await bs.pickDir();
+  if (!r.ok) return false;
+  await refreshInstall();
+  return true;
+}
+$('#installCog').onclick = chooseDir;
+$('#optPick').onclick = chooseDir;
+
+// ---- amis ----
+function friendRow(f) {
+  const where = f.online ? `En ville${f.server?.name ? ` — ${esc(f.server.name)}` : ''}` : 'Hors ligne';
+  return `<div class="fr${f.online ? ' on' : ''}"><i class="pt"></i>
+    <span><b>${esc(f.name)}</b><small>${where}</small></span>
+    <span class="grow"></span>
+    <button data-rm="${esc(f.name)}">Retirer</button></div>`;
+}
+async function loadFriends() {
+  if (!connected) return;
+  const v = await bs.friends();
+  if (v?.error) { $('#frList').innerHTML = `<p class="empty">${esc(v.error)}</p>`; return; }
+  paintFriends(v);
+}
+function paintFriends(v) {
+  const reqs = v.requests || [], list = v.friends || [];
+  $('#frDot').style.display = reqs.length ? 'block' : 'none';
+  $('#frReqWrap').style.display = reqs.length ? '' : 'none';
+  $('#frReq').innerHTML = reqs.map(n => `<div class="fr"><i class="pt"></i>
+    <span><b>${esc(n)}</b><small>Veut être ton ami</small></span>
+    <span class="grow"></span>
+    <button class="yes" data-yes="${esc(n)}">Accepter</button>
+    <button class="no" data-no="${esc(n)}">Refuser</button></div>`).join('');
+  $('#frList').innerHTML = list.length
+    ? list.map(friendRow).join('')
+    : '<p class="empty">Personne pour l\u2019instant. Ajoute un joueur par son pseudo.</p>';
+}
+
+// Un seul écouteur pour toute la page : les boutons sont recréés à chaque mise à jour.
+document.getElementById('tab-friends').addEventListener('click', async e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const msg = $('#frMsg');
+  let r = null;
+  if (b.dataset.rm) {
+    const ok = await confirmBox('Retirer cet ami', `${b.dataset.rm} ne sera plus dans ta liste.`, 'Retirer');
+    if (!ok) return;
+    r = await bs.friendAction('remove', b.dataset.rm);
+  } else if (b.dataset.yes) r = await bs.friendAction('respond', { name: b.dataset.yes, accept: true });
+  else if (b.dataset.no) r = await bs.friendAction('respond', { name: b.dataset.no, accept: false });
+  if (!r) return;
+  msg.className = 'msg ' + (r.ok ? 'ok' : 'err');
+  msg.textContent = r.ok ? (r.info || '') : (r.error || 'Action impossible.');
+  if (r.ok) paintFriends(r);
+});
+
+$('#frAdd').onclick = async () => {
+  const msg = $('#frMsg'), name = $('#frName').value.trim();
+  if (!name) { msg.className = 'msg err'; msg.textContent = 'Entre un pseudo.'; return; }
+  const r = await bs.friendAction('add', name);
+  msg.className = 'msg ' + (r.ok ? 'ok' : 'err');
+  msg.textContent = r.ok ? (r.info || `${name} a été ajouté.`) : (r.error || 'Demande impossible.');
+  if (r.ok) { $('#frName').value = ''; paintFriends(r); }
 };
 
 // ---- notes de version ----
