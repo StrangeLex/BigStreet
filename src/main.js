@@ -12,7 +12,7 @@
  * Le launcher n'embarque pas le jeu : il ouvre playbigstreet.com. Le contenu
  * se met donc à jour côté serveur, sans rien réinstaller.
  */
-const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme, dialog, net, safeStorage, Notification } = require('electron');
 const crypto = require('node:crypto');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
@@ -44,6 +44,11 @@ if (process.defaultApp) {
   if (process.argv.length >= 2) app.setAsDefaultProtocolClient(PROTOCOL, process.execPath, [path.resolve(process.argv[1])]);
 } else app.setAsDefaultProtocolClient(PROTOCOL);
 const authLinkIn = argv => (argv || []).find(a => typeof a === 'string' && a.startsWith(`${PROTOCOL}://`)) || null;
+// Notifications Windows : rattachees a l'application installee (meme identifiant
+// que le raccourci du menu Demarrer pose par l'installeur), sinon elles n'apparaissent pas.
+if (process.platform === 'win32') app.setAppUserModelId('com.strangelex.bigstreet');
+// Un lien « bigstreet:// » : retour de connexion, ou bouton d'une notification de demande d'ami.
+const handleLink = url => (/^bigstreet:\/\/friend\?/i.test(String(url)) ? handleFriendLink(url) : handleAuthLink(url));
 
 // ------------------------------------------------------------- Réglages
 const SETTINGS_FILE = () => path.join(app.getPath('userData'), 'settings.json');
@@ -72,7 +77,10 @@ function readSettings() {
   const pct = Math.min(90, Math.max(10, Number(s.ramPercent) || 50));
   return { ramPercent: pct, token: openToken(s.token),
     installDir: typeof s.installDir === 'string' ? s.installDir : '',
-    authNonce: s.authNonce && typeof s.authNonce.value === 'string' ? s.authNonce : null };
+    authNonce: s.authNonce && typeof s.authNonce.value === 'string' ? s.authNonce : null,
+    // (demandes d'amis deja notifiees : pseudo -> jeton de la notification)
+    friendNotified: Object.fromEntries(Object.entries(s.friendNotified && typeof s.friendNotified === 'object' ? s.friendNotified : {})
+      .filter(([k, v]) => typeof k === 'string' && typeof v === 'string' && /^[0-9a-f]{32}$/.test(v))) };
 }
 function writeSettings(patch) {
   const next = { ...readSettings(), ...patch };
@@ -156,9 +164,9 @@ app.on('second-instance', (_e, argv) => {
   const w = game || launcher;
   if (w) { if (w.isMinimized()) w.restore(); w.focus(); }
   const link = authLinkIn(argv);
-  if (link) handleAuthLink(link);
+  if (link) handleLink(link);
 });
-app.on('open-url', (e, url) => { e.preventDefault(); handleAuthLink(url); });   // (macOS)
+app.on('open-url', (e, url) => { e.preventDefault(); handleLink(url); });   // (macOS)
 
 // Lien cliqué alors que le launcher était fermé : Windows démarre l'application
 // avec l'adresse en argument — « second-instance » ne se déclenche pas.
@@ -340,6 +348,84 @@ async function handleAuthLink(raw) {
     if (pending) return send({ ok: true, provider, pending, suggest: q.get('name') || '' });
   }
   send({ ok: false, error: 'Reponse inattendue du site.' });
+}
+
+// ------------------------------------------- Notifications de demandes d'amis
+/**
+ * Tant que le launcher est ouvert et que le joueur n'est pas en jeu, une demande
+ * d'ami recue declenche une notification Windows : Accepter, Refuser, Ignorer.
+ * En jeu, c'est le jeu qui la montre : pas de doublon.
+ *
+ * Chaque notification porte un jeton tire au hasard, garde dans les reglages :
+ * une page web peut faire ouvrir « bigstreet://friend?... », mais sans ce jeton
+ * le lien est ignore — elle ne peut donc pas accepter un ami a ta place.
+ * Une demande deja notifiee ne l'est plus (« Ignorer » la laisse en attente,
+ * dans l'onglet Amis).
+ */
+const xmlEsc = t => String(t).replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&apos;' }[c]));
+function notifyFriend(name) {
+  const k = crypto.randomBytes(16).toString('hex');
+  if (!Notification.isSupported()) return k;
+  const link = act => xmlEsc(`${PROTOCOL}://friend?do=${act}&name=${encodeURIComponent(name)}&k=${k}`);
+  const opts = { title: 'Demande d’ami', body: `${name} veut être ton ami sur Big Street.` };
+  if (process.platform === 'win32') {
+    opts.toastXml = `<toast launch="${link('open')}" activationType="protocol">
+  <visual><binding template="ToastGeneric">
+    <text>Demande d’ami</text>
+    <text>${xmlEsc(name)} veut être ton ami sur Big Street.</text>
+  </binding></visual>
+  <actions>
+    <action content="Accepter" activationType="protocol" arguments="${link('accept')}"/>
+    <action content="Refuser" activationType="protocol" arguments="${link('refuse')}"/>
+    <action content="Ignorer" activationType="system" arguments="dismiss"/>
+  </actions>
+</toast>`;
+  }
+  const n = new Notification(opts);
+  n.on('click', () => showFriends());          // (hors Windows : un clic ouvre l'onglet Amis)
+  n.show();
+  log.info('notification : demande d’ami de ' + name);
+  return k;
+}
+function showFriends() {
+  if (!launcher || launcher.isDestroyed()) return;
+  if (launcher.isMinimized()) launcher.restore();
+  launcher.show(); launcher.focus();
+  launcher.webContents.send('bs:show-friends');
+}
+async function friendWatch() {
+  try {
+    const { token, friendNotified = {} } = readSettings();
+    if (!token || (game && !game.isDestroyed())) return;
+    const v = await api('friends', { token });
+    if (!Array.isArray(v?.requests) || v.inGame) return;   // (en jeu depuis un navigateur : le jeu la montre)
+    const keep = {}; let fresh = false;
+    for (const n of v.requests) {
+      const key = String(n).toLowerCase();
+      if (friendNotified[key]) keep[key] = friendNotified[key];
+      else { keep[key] = notifyFriend(n); fresh = true; }
+    }
+    if (fresh || Object.keys(keep).length !== Object.keys(friendNotified).length) writeSettings({ friendNotified: keep });
+    if (fresh && launcher && !launcher.isDestroyed()) launcher.webContents.send('bs:friends-changed');
+  } catch (e) { log.warn('demandes d’amis : ' + e); }
+}
+async function handleFriendLink(raw) {
+  let u; try { u = new URL(String(raw)); } catch { return; }
+  const name = u.searchParams.get('name') || '', act = u.searchParams.get('do'), key = name.toLowerCase();
+  const { token, friendNotified = {} } = readSettings();
+  if (!name || !friendNotified[key] || u.searchParams.get('k') !== friendNotified[key]) { log.warn('lien d’ami non sollicité : ignoré'); return; }
+  if (act === 'open') return showFriends();
+  if ((act !== 'accept' && act !== 'refuse') || !token) return;
+  const { [key]: _, ...rest } = friendNotified;
+  writeSettings({ friendNotified: rest });     // (a usage unique)
+  let r;
+  try { r = await api('friends/respond', { method: 'POST', body: { name, accept: act === 'accept' }, token }); }
+  catch (e) { r = { error: 'Serveur injoignable.' }; log.error('amis : ' + e); }
+  if (Notification.isSupported()) {
+    new Notification(r?.error ? { title: 'Demande d’ami', body: `${name} : ${r.error}` }
+      : { title: 'Big Street', body: act === 'accept' ? `${name} et toi, vous êtes maintenant amis.` : `Demande de ${name} refusée.` }).show();
+  }
+  if (launcher && !launcher.isDestroyed()) launcher.webContents.send('bs:friends-changed');
 }
 
 // ------------------------------------------------- Installation des ressources
@@ -918,16 +1004,19 @@ function updateThenStart() {
 // Controles automatiques (tools/selftest.mjs) : le module expose ses rouages
 // et n'ouvre aucune fenetre.
 if (process.env.BS_SELFTEST) {
-  module.exports = { safeDest, runInstall, handleAuthLink, readSettings, writeSettings, installDir, state: () => dl };
+  module.exports = { safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, state: () => dl };
 }
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {
   preferDedicatedGpu();
   createSplash();
   // Lien de connexion cliqué launcher fermé : on le traite une fois la fenêtre prête.
-  if (startupLink) setTimeout(() => handleAuthLink(startupLink), 1500);
+  if (startupLink) setTimeout(() => handleLink(startupLink), 1500);
   if (await updateThenStart()) return;   // l'application redémarre
   createLauncher();
+  // Demandes d'amis : un premier coup d'oeil peu apres l'ouverture, puis toutes les 30 s.
+  setTimeout(friendWatch, 8000);
+  setInterval(friendWatch, 30000);
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

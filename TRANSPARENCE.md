@@ -27,6 +27,16 @@ Ce document est la référence ; le code est dans `src/`, et il est public.
   d'ouvrir le jeu. Jamais en pleine partie. Il n'y a volontairement ni
   bouton ni question : le launcher est toujours à jour.
 - Le **jeu**, lui, se recharge à la demande avec le bouton ⟳ en bas à droite.
+- **Demandes d'amis** : l'onglet Amis montre les demandes reçues (sur le site
+  ou en jeu) et permet de les accepter ou de les refuser. Tant que le launcher
+  est ouvert et que tu n'es pas en jeu, il regarde toutes les 30 secondes s'il
+  y en a une nouvelle et te l'annonce par une notification Windows (Accepter,
+  Refuser, Ignorer). Chaque notification porte un jeton tiré au hasard : un lien
+  `bigstreet://friend` qui ne le porte pas, venu d'une page web par exemple, est
+  ignoré. « Ignorer » laisse la demande en attente dans l'onglet Amis.
+- Embarque la bibliothèque **OpenRGB SDK** (MIT), prévue pour colorer plus tard
+  l'éclairage du clavier selon ce qui se passe en jeu. **Elle n'est pas
+  utilisée pour l'instant** : le launcher ne se connecte à rien avec.
 - Écrit un journal local, sur ta machine uniquement
   (`%APPDATA%\Big Street\logs\main.log`).
 - Affiche dans **Options** la version installée, la dernière version publiée,

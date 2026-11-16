@@ -384,11 +384,12 @@ async function loadFriends() {
   }, 20000);
 }
 function paintFriends(v) {
-  const reqs = v.requests || [], list = v.friends || [];
+  // (« pending » dit d'où vient chaque demande : du site, ou faite en jeu à l'un de tes personnages)
+  const reqs = v.pending || (v.requests || []).map(name => ({ name })), list = v.friends || [];
   $('#frDot').style.display = reqs.length ? 'block' : 'none';
   $('#frReqWrap').style.display = reqs.length ? '' : 'none';
-  $('#frReq').innerHTML = reqs.map(n => `<div class="fr"><i class="pt"></i>
-    <span><b>${esc(n)}</b><small>Veut être ton ami</small></span>
+  $('#frReq').innerHTML = reqs.map(({ name: n, game, char }) => `<div class="fr"><i class="pt"></i>
+    <span><b>${esc(n)}</b><small>${game ? `Veut être ami avec ${esc(char || 'toi')} (demande faite en jeu)` : 'Veut être ton ami'}</small></span>
     <span class="grow"></span>
     <button class="yes" data-yes="${esc(n)}">Accepter</button>
     <button class="no" data-no="${esc(n)}">Refuser</button></div>`).join('');
@@ -533,3 +534,8 @@ document.addEventListener('keydown', e => {
   paintDownload(st);
   if (st.state === 'download' || st.state === 'list') watchInstall();
 })();
+
+// Notification Windows traitée (accepter/refuser), ou nouvelle demande : la liste suit.
+bs.onFriendsChanged(() => { if (connected) bs.friends().then(x => { if (!x?.error) paintFriends(x); }).catch(() => {}); });
+// Clic sur une notification : l'onglet Amis s'ouvre.
+bs.onShowFriends(() => { if (connected) document.querySelector('.side button[data-tab="friends"]')?.click(); });

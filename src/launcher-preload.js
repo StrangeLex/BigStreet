@@ -43,6 +43,8 @@ contextBridge.exposeInMainWorld('bs', {
   // Amis
   friends: () => ipcRenderer.invoke('bs:friends'),
   friendAction: (action, name) => ipcRenderer.invoke('bs:friend-action', { action, name }),
+  onFriendsChanged: cb => ipcRenderer.on('bs:friends-changed', () => cb()),
+  onShowFriends: cb => ipcRenderer.on('bs:show-friends', () => cb()),
 
   version: () => ipcRenderer.invoke('bs:version'),
   uninstall: () => ipcRenderer.invoke('bs:uninstall'),

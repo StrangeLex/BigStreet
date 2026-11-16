@@ -10,7 +10,7 @@
  *  3. chemins d'installation : pas de remontée de dossier possible
  *  4. installation complète, puis reprise (rien à retélécharger)
  *  5. réparation d'un fichier abîmé
- *  6. un lien « bigstreet:// » forgé sans jeton est ignoré
+ *  6. un lien « bigstreet:// » forgé sans jeton est ignoré (connexion, demande d'ami)
  *
  * Le test écrit dans un dossier temporaire et le supprime à la fin ; il ne
  * touche ni aux réglages du joueur, ni au dossier d'installation réel.
@@ -79,6 +79,13 @@ async function checkRuntime() {
 
     await m.handleAuthLink('bigstreet://auth#session=JETON_FORGE');
     ok('lien de connexion forgé ignoré', m.readSettings().token === '');
+
+    // (demande d'ami : sans le jeton de SA notification, le lien ne fait rien et le jeton reste)
+    m.writeSettings({ token: 'JETON_TEST', friendNotified: { bottestami: 'a'.repeat(32) } });
+    await m.handleFriendLink('bigstreet://friend?do=accept&name=BotTestAmi&k=' + 'b'.repeat(32));
+    await m.handleFriendLink('bigstreet://friend?do=accept&name=BotTestAmi');
+    ok('lien d’ami forgé ignoré', m.readSettings().friendNotified?.bottestami === 'a'.repeat(32));
+    m.writeSettings({ token: '', friendNotified: {} });
   } finally {
     m.writeSettings(avant);
     rmSync(dir, { recursive: true, force: true });
