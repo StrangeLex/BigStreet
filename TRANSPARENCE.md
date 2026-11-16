@@ -9,8 +9,8 @@ tout tient en 120 lignes et il est public.
 - Ouvre `https://playbigstreet.com/` dans une fenêtre Chromium (Electron).
 - Affiche un écran de chargement pendant la connexion.
 - Renvoie les liens externes vers ton navigateur habituel.
-- Vérifie au démarrage, puis toutes les 6 heures, s'il existe une version plus
-  récente **du launcher** sur les releases GitHub de ce dépôt.
+- Vérifie au démarrage s'il existe une version plus récente **du launcher**
+  sur les releases GitHub de ce dépôt.
 - Si oui : la télécharge et redémarre **tout seul, au lancement**, avant
   d'ouvrir le jeu. Jamais en pleine partie. Il n'y a volontairement ni
   bouton ni question : le launcher est toujours à jour.
