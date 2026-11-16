@@ -383,7 +383,7 @@ async function fetchAsset(url, tries = 3) {
 async function runInstall(dir) {
   dl = freshDl();
   dl.state = 'list';
-  let failed = null;
+  let failed = null, keepRef = null;
   try {
     const list = await api('assets');
     if (!Array.isArray(list?.files) || !list.files.length) throw new Error('liste de ressources vide');
@@ -392,6 +392,7 @@ async function runInstall(dir) {
     // n'est pas retelecharge. Sert aussi de « verifier et reparer ».
     const have = readManifest(dir)?.files || {};
     const todo = [], keep = {};
+    keepRef = keep;
     let total = 0;
     for (const f of list.files) {
       if (!safeDest(dir, f.p)) { log.warn('ressource au chemin refusé : ' + f.p); continue; }
@@ -431,10 +432,13 @@ async function runInstall(dir) {
       }
     };
 
-    const queue = todo.slice();
+    // Un fichier qui resiste ne doit pas faire echouer les 1 672 autres : il est
+    // mis de cote, et on repasse le ramasser a la fin. Sur une connexion qui
+    // trebuche, c'est la difference entre « installe » et « a recommencer ».
+    let queue = todo.slice();
     const worker = async () => {
       while (queue.length) {
-        if (failed || dl.state === 'cancel') return;      // un echec arrete tout le monde
+        if (dl.state === 'cancel') return;
         const f = queue.shift();
         const dest = safeDest(dir, f.p);
         try {
@@ -444,10 +448,18 @@ async function runInstall(dir) {
           fs.writeFileSync(dest, buf);
           keep[f.p] = f.v || '';
           dl.files++; bump(buf.length);
-        } catch (e) { failed = new Error(`${f.p} : ${e.message}`); return; }
+        } catch (e) { reste.push(f); derniere = `${f.p} : ${e.message}`; }
       }
     };
-    await Promise.all(Array.from({ length: 6 }, worker));
+    let reste = [], derniere = '';
+    for (let passe = 0; passe < 3; passe++) {
+      await Promise.all(Array.from({ length: 6 }, worker));
+      if (dl.state === 'cancel' || !reste.length) break;
+      log.warn(`${reste.length} fichier(s) à reprendre (passe ${passe + 1})`);
+      queue = reste; reste = [];
+      await new Promise(r => setTimeout(r, 1500));
+    }
+    if (reste.length) failed = new Error(`${reste.length} fichier(s) non téléchargés (${derniere})`);
     if (failed) throw failed;
     if (dl.state === 'cancel') {
       // Ce qui est deja descendu est conserve : la reprise repartira de la.
@@ -462,6 +474,11 @@ async function runInstall(dir) {
     log.info(`ressources installées dans ${dir} (${dl.files} téléchargés, ${dl.skipped} déjà présents)`);
   } catch (e) {
     log.error('installation : ' + e);
+    // Ce qui est descendu reste utilisable : une nouvelle tentative ne
+    // retelechargera que ce qui manque.
+    try {
+      if (keepRef) fs.writeFileSync(manifestFile(dir), JSON.stringify({ at: Date.now(), site: SITE, files: keepRef }));
+    } catch { /* tant pis */ }
     dl.state = 'error'; dl.error = String(e?.message || e);
   }
 }
@@ -827,19 +844,34 @@ ipcMain.handle('bs:uninstall', async () => {
 function updateThenStart() {
   if (!app.isPackaged) { log.info('développement : pas de mise à jour'); return Promise.resolve(false); }
   return new Promise(resolve => {
-    let done = false;
-    const finish = v => { if (!done) { done = true; resolve(v); } };
+    let done = false, stall = null;
+    const finish = v => { if (!done) { done = true; clearTimeout(stall); resolve(v); } };
+    // Un telechargement de mise a jour qui se fige ne doit pas laisser le
+    // joueur devant l'ecran de chargement : plus aucune progression pendant
+    // 60 s et on demarre quand meme (elle s'installera a la fermeture).
     const timer = setTimeout(() => { log.warn('vérification trop longue'); finish(false); }, UPDATE_TIMEOUT);
 
     autoUpdater.on('update-not-available', () => { clearTimeout(timer); finish(false); });
-    autoUpdater.on('error', e => { log.error('mise à jour : ' + (e?.message || e)); clearTimeout(timer); finish(false); });
+    autoUpdater.on('error', e => { log.error('mise à jour : ' + (e?.message || e)); clearTimeout(timer); clearTimeout(stall); finish(false); });
+    const watchStall = () => {
+      clearTimeout(stall);
+      stall = setTimeout(() => {
+        log.warn('téléchargement de la mise à jour figé : on démarre quand même');
+        finish(false);
+      }, 60000);
+    };
     autoUpdater.on('update-available', i => {
       clearTimeout(timer);
       log.info(`mise à jour ${i.version}`);
       splashSay('Mise à jour du launcher…');
+      watchStall();
     });
-    autoUpdater.on('download-progress', p => splashSay(`Mise à jour du launcher… ${Math.round(p.percent)} %`));
+    autoUpdater.on('download-progress', p => {
+      watchStall();
+      splashSay(`Mise à jour du launcher… ${Math.round(p.percent)} %`);
+    });
     autoUpdater.on('update-downloaded', () => {
+      clearTimeout(stall);
       splashSay('Redémarrage…');
       finish(true);
       setTimeout(() => autoUpdater.quitAndInstall(true, true), 400);

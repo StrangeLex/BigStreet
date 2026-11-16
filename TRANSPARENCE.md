@@ -71,6 +71,11 @@ ton disque. Ce que le bouton **Installer le jeu** télécharge, ce sont ses
 que le jeu allait chercher au fil de la partie. Tu choisis le disque et le
 dossier ; rien n'est écrit ailleurs.
 
+Un fichier qui refuse de descendre n'arrête pas les autres : il est mis de côté
+et repris à la fin, en trois passes. Une installation interrompue reprend là où
+elle s'était arrêtée, et le bouton **Vérifier et réparer** retélécharge
+uniquement ce qui manque ou a été abîmé.
+
 Ensuite, le launcher sert ces fichiers depuis ton disque au lieu du réseau,
 **à condition que leur empreinte corresponde** à celle que le site annonce. Dès
 qu'une ressource change côté serveur, c'est la version du serveur qui est
