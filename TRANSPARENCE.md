@@ -106,6 +106,16 @@ utilisée : une copie locale périmée ne peut pas te faire jouer avec un vieux
 contenu. Tu peux supprimer ce dossier à tout moment, le jeu retombera
 simplement sur le réseau.
 
+### Changer de disque
+
+Le bouton ⚙ à côté de « Lancer Big Street » liste tes disques avec leur place
+libre, les SSD en premier. Pour les reconnaître, le launcher lit seulement la
+liste des volumes et le type de chaque disque (SSD ou disque dur) par
+PowerShell (`Get-Volume`, `Get-PhysicalDisk`). Rien n'est écrit à ce moment-là.
+Si tu choisis un autre disque, les ressources y sont copiées fichier par
+fichier et vérifiées. L'ancienne copie n'est effacée qu'après. Si quelque chose
+échoue en route, le jeu reste à son ancien emplacement.
+
 ## Le jeu n'est pas dans le launcher
 
 Le launcher pèse ~78 Mo mais **ne contient pas le jeu** : c'est le poids

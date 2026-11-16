@@ -358,7 +358,69 @@ async function chooseDir() {
   }
   return true;
 }
-$('#installCog').onclick = chooseDir;
+// ---- disques : choisir où installer, migrer le jeu ----
+const gb = n => n >= 1e12 ? `${(n / 1e12).toFixed(1).replace(/\.0$/, '').replace('.', ',')} To` : `${Math.round(n / 1e9)} Go`;
+let drvSel = '', drvList = [], drvInstalled = false, migTimer = null;
+function paintDrives() {
+  $('#drvList').innerHTML = drvList.length ? drvList.map(d => {
+    const used = d.size ? Math.round((1 - d.free / d.size) * 100) : 0;
+    const name = `${d.letter}:${d.label ? ` — ${esc(d.label)}` : d.system ? ' — Windows' : ''}`;
+    const tag = d.kind === 'ssd' ? '<span class="tag ssd">SSD</span>' : d.kind === 'hdd' ? '<span class="tag">Disque dur</span>' : '<span class="tag">Disque</span>';
+    return `<button class="dk${d.letter === drvSel ? ' sel' : ''}${d.current ? ' cur' : ''}" data-l="${esc(d.letter)}">
+      <span class="ic">${d.kind === 'ssd' ? '⚡' : '🖴'}</span><b>${name}</b>${tag}
+      <span class="dbar"><i style="width:${used}%"></i></span>
+      <small>${gb(d.free)} libres sur ${gb(d.size)}</small></button>`;
+  }).join('') : '<p class="empty">Aucun disque trouvé.</p>';
+  const cur = drvList.find(d => d.current), pick = drvList.find(d => d.letter === drvSel);
+  $('#drvGo').disabled = !pick || pick === cur || !!migTimer;
+  $('#drvGo').textContent = drvInstalled ? 'Migrer ici' : 'Installer ici';
+}
+async function openDrives() {
+  $('#drvMsg').textContent = ''; $('#drvMsg').className = 'msg';
+  if (!migTimer) $('#drvProg').style.display = 'none';
+  $('#drvModal').classList.add('on');
+  const info = await bs.installInfo().catch(() => null);
+  drvInstalled = !!info?.installed;
+  $('#drvHint').textContent = drvInstalled
+    ? `Le jeu occupe ${info.files} fichiers dans ${info.dir}. Choisis un autre disque pour l'y déplacer — un SSD le charge plus vite.`
+    : 'Choisis le disque où installer les ressources du jeu. Un SSD les charge plus vite.';
+  drvList = await bs.drives().catch(() => []);
+  drvSel = drvSel && drvList.some(d => d.letter === drvSel) ? drvSel : (drvList.find(d => d.current)?.letter || '');
+  paintDrives();
+}
+$('#installCog').onclick = openDrives;
+$('#drvList').addEventListener('click', e => {
+  const b = e.target.closest('.dk'); if (!b || migTimer) return;
+  drvSel = b.dataset.l; paintDrives();
+});
+const closeDrives = () => { $('#drvModal').classList.remove('on'); };
+$('#drvClose').onclick = closeDrives;
+$('#drvModal').onclick = e => { if (e.target === $('#drvModal') && !migTimer) closeDrives(); };
+$('#drvDir').onclick = async () => { closeDrives(); await chooseDir(); };
+$('#drvGo').onclick = async () => {
+  const msg = $('#drvMsg'), d = drvList.find(x => x.letter === drvSel); if (!d) return;
+  if (drvInstalled && !await confirmBox('Migrer le jeu', `Les ressources du jeu vont être déplacées sur ${d.letter}:. L'ancienne copie sera effacée une fois la nouvelle vérifiée.`, 'Migrer')) return;
+  $('#drvModal').classList.add('on');
+  const r = await bs.migrate(drvSel);
+  if (!r.ok) { msg.className = 'msg err'; msg.textContent = r.error || 'Déplacement impossible.'; return; }
+  if (!r.moved) { msg.className = 'msg ok'; msg.textContent = `Le jeu s'installera dans ${r.dir}.`; await refreshInstall(); openDrives(); return; }
+  $('#drvProg').style.display = ''; $('#drvBar').style.width = '0';
+  msg.className = 'msg'; msg.textContent = 'Déplacement en cours…';
+  migTimer = setInterval(async () => {
+    const st = await bs.migrateState();
+    const pct = st.total ? Math.round(st.done / st.total * 100) : 0;
+    $('#drvBar').style.width = pct + '%';
+    if (st.state === 'copy') msg.textContent = `Déplacement en cours… ${pct} % (${Math.round(st.done / 1048576)} / ${Math.round(st.total / 1048576)} Mo)`;
+    else if (st.state === 'clean') msg.textContent = 'Effacement de l’ancienne copie…';
+    else {
+      clearInterval(migTimer); migTimer = null;
+      if (st.state === 'done') { msg.className = 'msg ok'; msg.textContent = `Jeu déplacé dans ${st.dir}.`; }
+      else { msg.className = 'msg err'; msg.textContent = `Déplacement interrompu : ${st.error}. Le jeu est resté à son ancien emplacement.`; }
+      await refreshInstall(); openDrives();
+    }
+  }, 400);
+  paintDrives();
+};
 $('#optPick').onclick = chooseDir;
 
 // ---- amis ----

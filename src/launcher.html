@@ -124,6 +124,29 @@
 
   .tick{display:flex;align-items:center;gap:9px;cursor:pointer;margin-top:16px}
   .tick input{width:17px;height:17px;margin:0;accent-color:#22d3ee}
+  /* ---- disques ---- */
+  .card.drv{width:440px}
+  .dlist{display:flex;flex-direction:column;gap:8px;margin:0 0 12px;max-height:290px;overflow:auto}
+  .dk{display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:center;text-align:left;
+    border:1px solid var(--line);border-radius:11px;padding:10px 12px;background:transparent;color:var(--ink);
+    cursor:pointer;font-family:inherit}
+  .card .dk{flex:none;font-weight:400}
+  .dk:hover{background:var(--hover)}
+  .dk.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset}
+  .dk .ic{grid-row:span 2;font-size:22px;width:34px;text-align:center}
+  .dk b{font-size:14px}
+  .dk .tag{font-size:10.5px;font-weight:800;letter-spacing:.04em;padding:2px 7px;border-radius:20px;
+    background:var(--soft);color:var(--muted);justify-self:end}
+  .dk .tag.ssd{background:color-mix(in srgb,#22d3ee 22%,transparent);color:var(--ink)}
+  .dk .dbar{grid-column:2/4;height:6px;border-radius:4px;background:var(--soft);overflow:hidden}
+  .dk .dbar i{display:block;height:100%;background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  .dk small{grid-column:2/4;color:var(--muted);font-size:12px}
+  .dk.cur small::after{content:" · le jeu est ici";font-weight:700;color:var(--ink)}
+  .dprog{height:8px;border-radius:5px;background:var(--soft);overflow:hidden;margin:0 0 10px}
+  .dprog i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent));transition:width .3s}
+  .card .drvdir{flex:none;width:100%;margin-top:10px;border:none;background:transparent;color:var(--muted);
+    font-size:12.5px;font-weight:600;text-decoration:underline;padding:4px}
+
   /* ---- amis ---- */
   .flist{display:flex;flex-direction:column;gap:7px;margin-top:4px}
   .fr{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:11px;padding:10px 13px}
@@ -297,7 +320,7 @@
           </div>
           <span class="grow"></span>
           <div class="acts">
-            <button class="cog" id="installCog" title="Dossier d'installation">⚙</button>
+            <button class="cog" id="installCog" title="Disque d'installation">⚙</button>
             <button class="cta" id="install"
                     style="background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.35)">Installer le jeu</button>
             <button class="cta" id="play">Lancer Big Street</button>
@@ -390,6 +413,22 @@
         </div>
       </div>
     </section>
+  </div>
+
+  <!-- disques : choisir où installer, migrer le jeu -->
+  <div class="modal" id="drvModal">
+    <div class="card drv">
+      <h3>Disque d'installation</h3>
+      <p id="drvHint">Choisis le disque où ranger les ressources du jeu. Un SSD les charge plus vite.</p>
+      <div class="dlist" id="drvList"><p class="empty">Recherche des disques…</p></div>
+      <div class="dprog" id="drvProg" style="display:none"><i id="drvBar"></i></div>
+      <div class="msg" id="drvMsg"></div>
+      <div class="acts">
+        <button id="drvClose">Fermer</button>
+        <button class="go" id="drvGo" disabled>Migrer ici</button>
+      </div>
+      <button class="drvdir" id="drvDir">Choisir un dossier précis…</button>
+    </div>
   </div>
 
   <!-- fenêtre de confirmation -->

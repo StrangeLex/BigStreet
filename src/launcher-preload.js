@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('bs', {
   // Installation des ressources du jeu
   installInfo: () => ipcRenderer.invoke('bs:install-info'),
   pickDir: () => ipcRenderer.invoke('bs:pick-dir'),
+  drives: () => ipcRenderer.invoke('bs:drives'),
+  migrate: letter => ipcRenderer.invoke('bs:migrate', letter),
+  migrateState: () => ipcRenderer.invoke('bs:migrate-state'),
   installStart: dir => ipcRenderer.invoke('bs:install-start', dir),
   installCancel: () => ipcRenderer.invoke('bs:install-cancel'),
   installRemove: () => ipcRenderer.invoke('bs:install-remove'),

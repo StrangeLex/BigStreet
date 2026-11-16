@@ -15,7 +15,7 @@
  * Le test écrit dans un dossier temporaire et le supprime à la fin ; il ne
  * touche ni aux réglages du joueur, ni au dossier d'installation réel.
  */
-import { readFileSync, writeFileSync, statSync, rmSync, mkdtempSync } from 'node:fs';
+import { readFileSync, writeFileSync, statSync, rmSync, mkdtempSync, existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
@@ -86,6 +86,20 @@ async function checkRuntime() {
     await m.handleFriendLink('bigstreet://friend?do=accept&name=BotTestAmi');
     ok('lien d’ami forgé ignoré', m.readSettings().friendNotified?.bottestami === 'a'.repeat(32));
     m.writeSettings({ token: '', friendNotified: {} });
+
+    // (migration vers un autre dossier : tout arrive, vérifié, et l'ancienne copie disparaît)
+    const dest = mkdtempSync(path.join(os.tmpdir(), 'bs-migre-'));
+    try {
+      const n = Object.keys(JSON.parse(readFileSync(path.join(dir, 'manifest.json'), 'utf8')).files).length;
+      const r = await m.migrateDir(dest);
+      while (['copy', 'clean'].includes(m.migState().state)) await new Promise(res => setTimeout(res, 100));
+      const man = JSON.parse(readFileSync(path.join(dest, 'manifest.json'), 'utf8'));
+      ok(`migration — ${Object.keys(man.files).length}/${n} fichiers`, r.ok && m.migState().state === 'done'
+        && Object.keys(man.files).length === n && m.installDir() === dest
+        && !existsSync(path.join(dir, 'models')) && existsSync(path.join(dest, 'models')));
+      const drives = await m.listDrives();
+      ok(`liste des disques — ${drives.length}`, drives.length > 0 && drives.every(d => d.free >= 0 && d.size > 0));
+    } finally { rmSync(dest, { recursive: true, force: true }); }
   } finally {
     m.writeSettings(avant);
     rmSync(dir, { recursive: true, force: true });

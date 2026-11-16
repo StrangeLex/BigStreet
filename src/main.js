@@ -921,6 +921,122 @@ ipcMain.handle('bs:install-remove', async () => {
     return { ok: false, error: String(e?.message || e) };
   }
 });
+// --- disques : lesquels, combien de place, SSD ou disque dur ---
+// PowerShell (inclus dans Windows 10 et 11) : volumes fixes avec une lettre,
+// relies a leur disque physique pour savoir s'il s'agit d'un SSD (ou NVMe) ou
+// d'un disque dur. Rien n'est ecrit, c'est une lecture.
+const DRIVES_PS = `$ErrorActionPreference='SilentlyContinue'
+$pd = @(Get-PhysicalDisk)
+@(Get-Volume | Where-Object { $_.DriveLetter -and $_.DriveType -eq 'Fixed' } | ForEach-Object {
+  $v = $_; $media = ''; $bus = ''; $spin = $null
+  $p = Get-Partition -DriveLetter $v.DriveLetter | Select-Object -First 1
+  if ($p) { $d = $pd | Where-Object { $_.DeviceId -eq [string]$p.DiskNumber } | Select-Object -First 1
+    if ($d) { $media = [string]$d.MediaType; $bus = [string]$d.BusType; $spin = $d.SpindleSpeed } }
+  [pscustomobject]@{ letter = [string]$v.DriveLetter; label = $v.FileSystemLabel; size = [double]$v.Size; free = [double]$v.SizeRemaining; media = $media; bus = $bus; spin = $spin }
+}) | ConvertTo-Json -Compress`;
+function driveKind(d) {
+  if (d.media === 'SSD' || d.bus === 'NVMe' || d.spin === 0) return 'ssd';
+  if (d.media === 'HDD' || d.spin > 0) return 'hdd';
+  return '';
+}
+function listDrives() {
+  const sys = (process.env.SystemDrive || 'C:').slice(0, 1).toUpperCase();
+  const cur = path.parse(path.resolve(installDir())).root.slice(0, 1).toUpperCase();
+  const finish = list => list
+    .map(d => ({ ...d, kind: d.kind ?? driveKind(d), system: d.letter === sys, current: d.letter === cur }))
+    .filter(d => d.size > 0)
+    // (SSD d'abord, puis inconnus, puis disques durs ; a type egal, le plus de place libre)
+    .sort((a, b) => ({ ssd: 0, '': 1, hdd: 2 }[a.kind] - { ssd: 0, '': 1, hdd: 2 }[b.kind]) || b.free - a.free);
+  if (process.platform !== 'win32') {
+    // (hors Windows, pour les essais : le disque du dossier personnel)
+    try { const st = fs.statfsSync(os.homedir()); return Promise.resolve(finish([{ letter: cur || '/', label: os.homedir(), size: st.blocks * st.bsize, free: st.bavail * st.bsize, kind: '' }])); }
+    catch { return Promise.resolve([]); }
+  }
+  return new Promise(resolve => {
+    require('node:child_process').execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', DRIVES_PS],
+      { windowsHide: true, timeout: 12000, maxBuffer: 1 << 20 }, (err, out) => {
+        let list = [];
+        try { const j = JSON.parse(String(out || '').trim() || '[]'); list = (Array.isArray(j) ? j : [j]).filter(d => /^[A-Z]$/i.test(d?.letter || '')).map(d => ({ ...d, letter: d.letter.toUpperCase(), label: String(d.label || '') })); }
+        catch (e) { log.warn('disques (PowerShell) : ' + (err?.message || e)); }
+        if (!list.length) {
+          // (PowerShell indisponible : les lettres qui repondent, sans le type)
+          for (const L of 'CDEFGHIJKLMNOPQRSTUVWXYZ') {
+            try { const st = fs.statfsSync(`${L}:\\`); if (st.blocks > 0) list.push({ letter: L, label: '', size: st.blocks * st.bsize, free: st.bavail * st.bsize, kind: '' }); } catch { /* absente */ }
+          }
+        }
+        resolve(finish(list));
+      });
+  });
+}
+ipcMain.handle('bs:drives', () => listDrives());
+
+// --- migration des ressources vers un autre disque ---
+// Copie fichier par fichier (ceux du manifeste, rien d'autre), verifie les
+// tailles, bascule le reglage, puis seulement efface l'ancienne copie : une
+// coupure en plein milieu laisse l'ancienne installation intacte et utilisee.
+let mig = { state: 'idle', done: 0, total: 0, error: '', dir: '' };
+const dirOnDrive = letter => {
+  const def = defaultInstallDir();
+  if (path.parse(def).root.slice(0, 1).toUpperCase() === letter) return def;
+  return process.platform === 'win32' ? `${letter}:\\Big Street` : path.join(os.homedir(), 'Big Street');
+};
+const migrateTo = letter => migrateDir(dirOnDrive(letter), `${letter}:`);
+async function migrateDir(to, where = to) {
+  const from = installDir(), man = readManifest(from);
+  if (path.resolve(from) === path.resolve(to)) return { ok: false, error: 'Le jeu est déjà sur ce disque.' };
+  if (!man) {
+    // (rien d'installe : on retient seulement le nouvel emplacement)
+    writeSettings({ installDir: to }); manCache = { path: '', mtime: 0, data: null }; dl = freshDl();
+    return { ok: true, dir: to, moved: 0 };
+  }
+  const files = Object.keys(man.files).filter(p => safeDest(from, p));
+  let total = 0;
+  for (const p of files) { try { total += fs.statSync(safeDest(from, p)).size; } catch { /* manquant : ne sera pas copie */ } }
+  try {
+    fs.mkdirSync(to, { recursive: true });
+    const st = fs.statfsSync(to), free = st.bavail * st.bsize;
+    if (free < total * 1.05 + 50 * 1048576) return { ok: false, error: `Place insuffisante sur ${where} (${Math.round(free / 1048576)} Mo libres, ${Math.round(total / 1048576)} Mo nécessaires).` };
+  } catch (e) { return { ok: false, error: `Impossible d'écrire sur ${where} (${e.code || e.message}).` }; }
+
+  mig = { state: 'copy', done: 0, total, error: '', dir: to };
+  (async () => {
+    const copied = {};
+    try {
+      for (const p of files) {
+        const src = safeDest(from, p), dst = safeDest(to, p);
+        let size; try { size = fs.statSync(src).size; } catch { continue; }
+        await fs.promises.mkdir(path.dirname(dst), { recursive: true });
+        await fs.promises.copyFile(src, dst);
+        if ((await fs.promises.stat(dst)).size !== size) throw new Error('copie incomplète : ' + p);
+        copied[p] = man.files[p]; mig.done += size;
+      }
+      fs.writeFileSync(manifestFile(to), JSON.stringify({ ...man, files: copied }));
+      writeSettings({ installDir: to });
+      manCache = { path: '', mtime: 0, data: null }; dl = freshDl();
+      mig.state = 'clean';
+      for (const sub of ['models', 'data', 'js']) fs.rmSync(path.join(from, sub), { recursive: true, force: true });
+      fs.rmSync(manifestFile(from), { force: true });
+      try { fs.rmdirSync(from); } catch { /* pas vide : on le laisse */ }
+      mig.state = 'done';
+      log.info(`ressources migrées : ${from} → ${to} (${files.length} fichiers)`);
+    } catch (e) {
+      log.error('migration : ' + e);
+      // (l'ancienne installation reste celle utilisee ; la copie partielle est retiree)
+      for (const sub of ['models', 'data', 'js']) { try { fs.rmSync(path.join(to, sub), { recursive: true, force: true }); } catch { /* tant pis */ } }
+      mig.state = 'error'; mig.error = String(e?.message || e);
+    }
+  })();
+  return { ok: true, dir: to, moved: files.length };
+}
+ipcMain.handle('bs:migrate', async (_e, letter) => {
+  if (dl.state === 'list' || dl.state === 'download') return { ok: false, error: 'Téléchargement en cours : attends la fin ou arrête-le.' };
+  if (mig.state === 'copy' || mig.state === 'clean') return { ok: false, error: 'Déplacement déjà en cours.' };
+  const L = String(letter || '').toUpperCase();
+  const drives = await listDrives();
+  if (!drives.some(d => d.letter === L)) return { ok: false, error: 'Disque introuvable.' };
+  return migrateTo(L);
+});
+ipcMain.handle('bs:migrate-state', () => mig);
 ipcMain.handle('bs:install-cancel', () => { if (dl.state === 'download') dl.state = 'cancel'; return { ok: true }; });
 ipcMain.handle('bs:install-state', () => dl);
 
@@ -1067,7 +1183,7 @@ function updateThenStart() {
 // Controles automatiques (tools/selftest.mjs) : le module expose ses rouages
 // et n'ouvre aucune fenetre.
 if (process.env.BS_SELFTEST) {
-  module.exports = { safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, state: () => dl };
+  module.exports = { safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
 }
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {
