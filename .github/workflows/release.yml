@@ -46,13 +46,20 @@ jobs:
       - name: Construire (sans publier)
         run: npx electron-builder --win --publish never
 
+      # (l'installeur web range ses fichiers dans un sous-dossier, dist/nsis-web :
+      # on rassemble ceux de la release dans out/, quel que soit l'endroit)
       - name: Repérer les fichiers
         id: files
         run: |
           version=$(node -p "require('./package.json').version")
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "setup=BigStreet-Setup-$version.exe" >> "$GITHUB_OUTPUT"
-          ls -la dist
+          find dist -maxdepth 2 -type f | grep -v unpacked
+          mkdir out
+          find dist -maxdepth 2 -type f \( -name "BigStreet-Setup-$version.exe*" -o -name "*.7z" -o -name "latest.yml" \) -not -path "*unpacked*" -exec cp {} out/ \;
+          ls -la out
+          for f in "out/BigStreet-Setup-$version.exe" out/latest.yml; do [ -f "$f" ] || { echo "::error::$f introuvable"; exit 1; }; done
+          ls out/*.7z > /dev/null || { echo "::error::paquet .7z introuvable"; exit 1; }
 
       # ---- 2. Signature (SignPath) ------------------------------------------
       - name: Envoyer l'installeur à SignPath
@@ -61,7 +68,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installeur-non-signe
-          path: dist/${{ steps.files.outputs.setup }}
+          path: out/${{ steps.files.outputs.setup }}
           if-no-files-found: error
 
       - name: Signer
@@ -82,15 +89,15 @@ jobs:
         if: env.SIGNPATH_API_TOKEN != ''
         run: |
           setup="${{ steps.files.outputs.setup }}"
-          node tools/fix-latest.mjs "dist/$setup" "signed/$setup" dist/latest.yml
-          cp "signed/$setup" "dist/$setup"
-          rm -f "dist/$setup.blockmap"
-          powershell -NoProfile -Command "(Get-AuthenticodeSignature 'dist/$setup') | Format-List Status,SignerCertificate"
+          node tools/fix-latest.mjs "out/$setup" "signed/$setup" out/latest.yml
+          cp "signed/$setup" "out/$setup"
+          rm -f "out/$setup.blockmap"
+          powershell -NoProfile -Command "(Get-AuthenticodeSignature 'out/$setup') | Format-List Status,SignerCertificate"
 
       # ---- 3. Empreintes ------------------------------------------------------
       - name: Calculer les empreintes
         run: |
-          cd dist
+          cd out
           sha256sum *.exe *.7z latest.yml > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
@@ -99,13 +106,13 @@ jobs:
       - name: Attester la provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-checksums: dist/SHA256SUMS.txt
+          subject-checksums: out/SHA256SUMS.txt
 
       # ---- 5. VirusTotal ------------------------------------------------------
       - name: Analyse VirusTotal
         if: env.VIRUSTOTAL_API_KEY != ''
         run: |
-          setup="dist/${{ steps.files.outputs.setup }}"
+          setup="out/${{ steps.files.outputs.setup }}"
           curl -sf --request POST --url https://www.virustotal.com/api/v3/files \
             --header "x-apikey: $VIRUSTOTAL_API_KEY" --form "file=@$setup" > /dev/null \
             && echo "vt=ok" >> "$GITHUB_ENV" || echo "::warning::envoi à VirusTotal refusé"
@@ -118,7 +125,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="${{ steps.files.outputs.version }}"; setup="${{ steps.files.outputs.setup }}"
-          sha=$(sha256sum "dist/$setup" | cut -d' ' -f1)
+          sha=$(sha256sum "out/$setup" | cut -d' ' -f1)
           {
             echo "<!-- verification -->"
             echo "### Vérifier ce que tu télécharges"
@@ -133,8 +140,8 @@ jobs:
             if [ "${vt:-}" = ok ]; then echo "- Analyse VirusTotal : https://www.virustotal.com/gui/file/$sha"; fi
             if [ -n "$SIGNPATH_API_TOKEN" ]; then echo "- Signature gratuite fournie par [SignPath.io](https://about.signpath.io), certificat de [SignPath Foundation](https://signpath.org)"; fi
           } > notes.md
-          files=(dist/*.exe dist/*.7z dist/latest.yml dist/SHA256SUMS.txt)
-          for b in dist/*.blockmap; do [ -e "$b" ] && files+=("$b"); done
+          files=(out/*.exe out/*.7z out/latest.yml out/SHA256SUMS.txt)
+          for b in out/*.blockmap; do [ -e "$b" ] && files+=("$b"); done
           gh release create "v$v" "${files[@]}" --title "$v" --notes-file notes.md --verify-tag
 
       # Les releases s'accumulent à chaque déploiement. On ne garde que les
