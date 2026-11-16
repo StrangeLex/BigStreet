@@ -87,6 +87,19 @@ async function checkRuntime() {
     ok('lien d’ami forgé ignoré', m.readSettings().friendNotified?.bottestami === 'a'.repeat(32));
     m.writeSettings({ token: '', friendNotified: {} });
 
+    // (fenêtre de jeu : un envoi vers le site garde son Origin à travers le relais — sinon « Origine refusée »)
+    {
+      const { BrowserWindow, session } = createRequire(import.meta.url)('electron');
+      const ses = session.fromPartition('bs-selftest-origin');
+      m.serveLocalAssets(ses);
+      const w = new BrowserWindow({ show: false, webPreferences: { session: ses } });
+      try {
+        await w.loadURL(SITE + '/');
+        const r = await w.webContents.executeJavaScript(`fetch('/api/friends/remove',{method:'POST',headers:{'Content-Type':'application/json'},body:'{"name":"x"}'}).then(r=>r.text())`);
+        ok('envoi depuis le jeu accepté par le site', !/Origine refus/.test(r));
+      } finally { w.destroy(); }
+    }
+
     // (migration vers un autre dossier : tout arrive, vérifié, et l'ancienne copie disparaît)
     const dest = mkdtempSync(path.join(os.tmpdir(), 'bs-migre-'));
     try {

@@ -690,6 +690,21 @@ function serveLocalAssets(session) {
         }
       }
     } catch { /* au moindre doute : le reseau */ }
+    // Relais d'un envoi (POST…) : net.fetch perd l'en-tete Origin, et le site
+    // refuse alors la requete (« Origine refusee », sa protection anti-CSRF).
+    // On le remet pour un envoi vers le site. Il ne peut venir que du site : la
+    // fenetre de jeu ne navigue que sur lui (will-navigate), et sa politique de
+    // securite (default-src 'self') interdit tout cadre tiers. (Le referent ne
+    // peut pas servir de preuve : le site l'efface, « no-referrer ».)
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+      try {
+        if (new URL(req.url).origin === SITE && !req.headers.has('origin')) {
+          const headers = new Headers(req.headers);
+          headers.set('Origin', SITE);
+          return net.fetch(req.url, { method: req.method, headers, body: req.body, duplex: 'half', bypassCustomProtocolHandlers: true });
+        }
+      } catch { /* adresse illisible : relais ordinaire */ }
+    }
     return net.fetch(req, { bypassCustomProtocolHandlers: true });
   });
   log.info('ressources locales actives');
@@ -1183,7 +1198,7 @@ function updateThenStart() {
 // Controles automatiques (tools/selftest.mjs) : le module expose ses rouages
 // et n'ouvre aucune fenetre.
 if (process.env.BS_SELFTEST) {
-  module.exports = { safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
+  module.exports = { serveLocalAssets, safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
 }
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {
