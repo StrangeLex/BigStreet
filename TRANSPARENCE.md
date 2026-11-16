@@ -11,7 +11,10 @@ tout tient en 120 lignes et il est public.
 - Renvoie les liens externes vers ton navigateur habituel.
 - Vérifie au démarrage, puis toutes les 6 heures, s'il existe une version plus
   récente **du launcher** sur les releases GitHub de ce dépôt.
-- Si oui : télécharge la mise à jour et **te demande** avant de redémarrer.
+- Si oui : la télécharge et redémarre **tout seul, au lancement**, avant
+  d'ouvrir le jeu. Jamais en pleine partie. Il n'y a volontairement ni
+  bouton ni question : le launcher est toujours à jour.
+- Le **jeu**, lui, se recharge à la demande avec le bouton ⟳ en bas à droite.
 - Écrit un journal local, sur ta machine uniquement
   (`%APPDATA%\Big Street\logs\main.log`).
 
@@ -25,7 +28,8 @@ tout tient en 120 lignes et il est public.
 - **Aucun accès à tes fichiers**, hors son propre dossier d'installation et de
   journal. Le rendu web tourne en bac à sable (`sandbox: true`,
   `nodeIntegration: false`, `contextIsolation: true`).
-- Il **ne se met pas à jour en silence** : rien ne s'installe sans ton accord.
+- Il **ne touche à rien d'autre** que son propre dossier. Seule l'application
+  elle-meme est mise a jour, jamais le reste de ta machine.
 
 ## Le jeu n'est pas dans le launcher
 
