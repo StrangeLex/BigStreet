@@ -191,6 +191,8 @@ function splashSay(text) {
 /** Fond de fenetre aligne sur le theme de Windows (evite un flash blanc). */
 const shellBg = () => (nativeTheme.shouldUseDarkColors ? '#14171d' : '#ffffff');
 
+let revealLauncher = () => {};
+ipcMain.handle('bs:ui-ready', () => { revealLauncher(); });
 function createLauncher() {
   launcher = new BrowserWindow({
     width: 880, height: 580, minWidth: 880, minHeight: 580,
@@ -209,10 +211,13 @@ function createLauncher() {
     if (HIDDEN_START) return;               // (demarrage avec Windows : il reste dans les icones cachees)
     if (launcher && !launcher.isDestroyed() && !launcher.isVisible()) launcher.show();
   };
-  launcher.once('ready-to-show', reveal);
-  // Filet : si la page n'arrive pas a s'afficher, l'ecran de chargement ne doit
-  // pas rester seul a l'ecran indefiniment.
-  setTimeout(reveal, 8000);
+  // La fenetre n'apparait que quand l'interface sait si le joueur est connecte
+  // (« bs:ui-ready ») : sinon l'ecran « Non connecte » clignote une fraction de
+  // seconde avant le bon. D'ici la, c'est l'ecran de chargement qui reste.
+  revealLauncher = reveal;
+  // Filet : si la page ne repond jamais, l'ecran de chargement ne doit pas
+  // rester seul a l'ecran indefiniment (la verification du compte abandonne a 15 s).
+  setTimeout(reveal, 17000);
   launcher.webContents.on('render-process-gone', (_e, d) => {
     log.error('interface interrompue : ' + d.reason);
     reveal();

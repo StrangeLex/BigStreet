@@ -7,6 +7,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('bs', {
   minimize: () => ipcRenderer.invoke('bs:minimize'),
   close: () => ipcRenderer.invoke('bs:close'),
+  uiReady: () => ipcRenderer.invoke('bs:ui-ready'),
 
   login: (name, password) => ipcRenderer.invoke('bs:login', { name, password }),
   logout: () => ipcRenderer.invoke('bs:logout'),

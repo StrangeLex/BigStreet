@@ -518,16 +518,17 @@ document.addEventListener('keydown', e => {
 
 // ---- démarrage ----
 (async () => {
+  const accP = bs.currentAccount();  // (lancée tout de suite : c'est elle qui fait attendre)
   settings = await bs.settings();
   $('#ram').value = settings.ramPercent;
   paintRam();
   $('#autoStart').checked = settings.autoStart !== false;
-  await refreshInstall();            // (dossier et état visibles même déconnecté)
+  await refreshInstall().catch(() => {});   // (dossier et état visibles même déconnecté)
   bs.version().then(v => {
     versionInfo = v;
     $('#verLine').textContent = `Launcher ${v.current}${v.latest && !v.upToDate ? ` — ${v.latest} au prochain démarrage` : ''}`;
   }).catch(() => {});
-  const acc = await bs.currentAccount();
+  const acc = await accP.catch(() => null);
   if (acc?.offline) {
     // Session gardée, site injoignable : on le dit, plutôt que d'afficher un
     // écran de connexion qui laisse croire à une déconnexion.
@@ -536,6 +537,8 @@ document.addEventListener('keydown', e => {
     msg.className = 'msg err';
     msg.textContent = 'Site injoignable : impossible de vérifier ta session. Vérifie ta connexion, puis relance le launcher.';
   } else showAccount(acc);
+  // (l'interface est dans son état réel : la fenêtre peut apparaître)
+  bs.uiReady();
   const st = await bs.installState();
   paintDownload(st);
   if (st.state === 'download' || st.state === 'list') watchInstall();
