@@ -2,13 +2,24 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
+<meta name="color-scheme" content="light dark">
 <meta http-equiv="Content-Security-Policy"
       content="default-src 'none'; style-src 'unsafe-inline'; script-src 'self'; img-src data:;">
 <title>Big Street</title>
 <style>
+  /* Thème clair par défaut, thème sombre si le système est en sombre.
+     Electron applique « prefers-color-scheme » d'après le réglage de Windows. */
   :root{
     --bg:#ffffff; --ink:#15181f; --muted:#6b7280; --line:#e6e8ee;
+    --hover:#f3f4f7; --soft:#f6f7f9; --field:#ffffff; --body:#374151;
     --accent:#ff24b6; --accent2:#22d3ee; --ok:#16a34a; --err:#dc2626;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#14171d; --ink:#eef1f6; --muted:#9aa3b2; --line:#272c35;
+      --hover:#1e222a; --soft:#1b1f26; --field:#1a1e25; --body:#c3cad6;
+      --ok:#4ade80; --err:#f87171;
+    }
   }
   *{box-sizing:border-box}
   html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
@@ -21,15 +32,15 @@
   .bar .sp{flex:1}
   .bar button{-webkit-app-region:no-drag;width:46px;height:38px;border:none;background:transparent;
     cursor:pointer;font-size:15px;color:var(--muted);line-height:1}
-  .bar button:hover{background:#f3f4f7;color:var(--ink)}
+  .bar button:hover{background:var(--hover);color:var(--ink)}
   .bar button.x:hover{background:#dc2626;color:#fff}
 
   .body{height:calc(100% - 38px);display:flex}
   .side{width:188px;border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:4px}
   .side button{border:none;background:transparent;text-align:left;padding:10px 12px;border-radius:9px;
     cursor:pointer;font-family:inherit;font-size:13.5px;color:var(--muted);font-weight:600}
-  .side button:hover{background:#f6f7f9;color:var(--ink)}
-  .side button.on{background:#f0f1f5;color:var(--ink)}
+  .side button:hover{background:var(--soft);color:var(--ink)}
+  .side button.on{background:var(--hover);color:var(--ink)}
   .side .sp{flex:1}
   .who{font-size:11.5px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
   .who b{color:var(--ink);display:block;font-size:13px}
@@ -40,7 +51,7 @@
 
   label{display:block;font-size:12px;font-weight:700;color:var(--muted);margin:12px 0 5px}
   input[type=text],input[type=password]{width:100%;padding:10px 12px;border:1px solid var(--line);
-    border-radius:9px;font-family:inherit;font-size:13.5px;background:#fff;color:var(--ink);user-select:text}
+    border-radius:9px;font-family:inherit;font-size:13.5px;background:var(--field);color:var(--ink);user-select:text}
   input:focus{outline:none;border-color:var(--accent)}
   .cta{margin-top:16px;width:100%;border:none;border-radius:11px;padding:13px;cursor:pointer;
     font-family:inherit;font-size:14px;font-weight:800;color:#fff;
@@ -52,7 +63,7 @@
   .notes article{border:1px solid var(--line);border-radius:12px;padding:13px 15px;margin-bottom:11px}
   .notes h3{margin:0 0 3px;font-size:14px}
   .notes time{font-size:11.5px;color:var(--muted)}
-  .notes p{margin:7px 0 0;font-size:13px;line-height:1.55;color:#374151;white-space:pre-wrap}
+  .notes p{margin:7px 0 0;font-size:13px;line-height:1.55;color:var(--body);white-space:pre-wrap}
 
   .row{display:flex;align-items:center;gap:12px;margin-top:6px}
   input[type=range]{flex:1;accent-color:var(--accent)}
@@ -97,7 +108,7 @@
           <p class="hint" id="playHint"></p>
           <button class="cta" id="play">Lancer Big Street</button>
           <button class="cta" id="logout"
-                  style="background:#f3f4f7;color:var(--ink);margin-top:9px">Se déconnecter</button>
+                  style="background:var(--hover);color:var(--ink);margin-top:9px">Se déconnecter</button>
           <div class="msg" id="playMsg"></div>
         </div>
       </div>

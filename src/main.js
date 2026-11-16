@@ -12,7 +12,7 @@
  * Le launcher n'embarque pas le jeu : il ouvre playbigstreet.com. Le contenu
  * se met donc à jour côté serveur, sans rien réinstaller.
  */
-const { app, BrowserWindow, ipcMain, shell, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, Menu, nativeTheme } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const log = require('electron-log');
 const path = require('node:path');
@@ -95,10 +95,13 @@ function splashSay(text) {
   ).catch(() => {});
 }
 
+/** Fond de fenetre aligne sur le theme de Windows (evite un flash blanc). */
+const shellBg = () => (nativeTheme.shouldUseDarkColors ? '#14171d' : '#ffffff');
+
 function createLauncher() {
   launcher = new BrowserWindow({
     width: 880, height: 580, frame: false, resizable: false, center: true,
-    backgroundColor: '#ffffff', show: false,
+    backgroundColor: shellBg(), show: false,
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'launcher-preload.js'),
@@ -112,6 +115,11 @@ function createLauncher() {
     launcher.show();
   });
   launcher.on('closed', () => { launcher = null; });
+  // Le joueur bascule Windows en clair/sombre pendant que le launcher est
+  // ouvert : la CSS suit toute seule, le fond de fenetre non.
+  nativeTheme.on('updated', () => {
+    if (launcher && !launcher.isDestroyed()) launcher.setBackgroundColor(shellBg());
+  });
 }
 
 /** Bouton discret, injecté dans la page, pour recharger le JEU à la demande. */
