@@ -492,7 +492,7 @@ async function runInstall(dir) {
 function serveLocalAssets(session) {
   if (session.__bsAssets) return;
   session.__bsAssets = true;
-  session.protocol.handle('https', req => {
+  session.protocol.handle('https', async req => {
     try {
       const u = new URL(req.url);
       // Le dossier et le manifeste sont relus a chaque fois : le joueur peut
@@ -503,10 +503,15 @@ function serveLocalAssets(session) {
         const want = u.searchParams.get('v') || '';
         if (v !== undefined && (!want || want === v)) {
           const file = safeDest(dir, u.pathname);
-          if (file && fs.existsSync(file)) {
-            return new Response(fs.readFileSync(file), {
-              headers: { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' },
-            });
+          // Lecture asynchrone : le processus principal fait aussi tourner
+          // l'interface, et le jeu demande ses modeles par centaines.
+          if (file) {
+            try {
+              const buf = await fs.promises.readFile(file);
+              return new Response(buf, {
+                headers: { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' },
+              });
+            } catch { /* absent ou illisible : le reseau prend le relais */ }
           }
         }
       }
@@ -880,7 +885,13 @@ function updateThenStart() {
   });
 }
 
-app.whenReady().then(async () => {
+// Controles automatiques (tools/selftest.mjs) : le module expose ses rouages
+// et n'ouvre aucune fenetre.
+if (process.env.BS_SELFTEST) {
+  module.exports = { safeDest, runInstall, handleAuthLink, readSettings, writeSettings, installDir, state: () => dl };
+}
+
+if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {
   createSplash();
   // Lien de connexion cliqué launcher fermé : on le traite une fois la fenêtre prête.
   if (startupLink) setTimeout(() => handleAuthLink(startupLink), 1500);

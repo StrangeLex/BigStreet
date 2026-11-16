@@ -45,3 +45,14 @@ Les launchers déjà installés détectent la nouvelle version au démarrage.
 la version, télécharge le delta puis propose le redémarrage. Le dépôt étant
 public, **aucun jeton n'est nécessaire** et aucun secret n'est embarqué dans
 l'application distribuée.
+
+## Contrôles avant publication
+
+```bash
+npm run selftest
+```
+
+Vérifie l'interface (identifiants, CSP), les garde-fous de chemin, une
+installation complète des ressources, sa reprise, la réparation d'un fichier
+abîmé, et le refus d'un lien `bigstreet://` forgé. Les réglages en place sont
+restaurés à la fin.
