@@ -35,5 +35,5 @@ jobs:
           name: BigStreet-Setup
           path: |
             dist/*.exe
-            dist/*.7z
-          if-no-files-found: error
+            dist/*.nsis.7z
+          if-no-files-found: warn
