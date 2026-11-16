@@ -223,12 +223,14 @@ $('#logout').onclick = async () => {
 };
 
 $('#play').onclick = async () => {
-  const msg = $('#playMsg');
-  $('#play').disabled = true; msg.className = 'msg'; msg.textContent = 'Ouverture…';
+  // Les messages du lancement s'écrivent sur le décor : c'est le seul endroit
+  // visible à ce moment-là.
+  const say = t => { $('#heroState').textContent = t; };
+  const before = $('#heroState').textContent;
+  $('#play').disabled = true; say('Ouverture du jeu…');
   const r = await bs.play();
   $('#play').disabled = false;
-  if (!r.ok) { msg.className = 'msg err'; msg.textContent = r.error || 'Lancement impossible.'; return; }
-  msg.textContent = '';
+  say(r.ok ? before : (r.error || 'Lancement impossible.'));
 };
 
 // ---- installation des ressources du jeu ----
@@ -457,11 +459,11 @@ $('#save').onclick = async () => {
   msg.textContent = 'Enregistré. Redémarre le launcher pour appliquer la mémoire.';
 };
 
-let versionLoaded = false;
+let versionLoaded = false, versionInfo = null;
 async function loadVersion() {
   if (versionLoaded) return;
   versionLoaded = true;
-  const v = await bs.version();
+  const v = versionInfo || (versionInfo = await bs.version());
   $('#verCur').textContent = v.current;
   $('#verLast').textContent = v.latest || 'indisponible';
   const st = $('#verState');
@@ -514,8 +516,19 @@ document.addEventListener('keydown', e => {
   $('#ram').value = settings.ramPercent;
   paintRam();
   await refreshInstall();            // (dossier et état visibles même déconnecté)
+  bs.version().then(v => {
+    versionInfo = v;
+    $('#verLine').textContent = `Launcher ${v.current}${v.latest && !v.upToDate ? ` — ${v.latest} au prochain démarrage` : ''}`;
+  }).catch(() => {});
   const acc = await bs.currentAccount();
-  showAccount(acc);
+  if (acc?.offline) {
+    // Session gardée, site injoignable : on le dit, plutôt que d'afficher un
+    // écran de connexion qui laisse croire à une déconnexion.
+    showAccount(null);
+    const msg = $('#loginMsg');
+    msg.className = 'msg err';
+    msg.textContent = 'Site injoignable : impossible de vérifier ta session. Vérifie ta connexion, puis relance le launcher.';
+  } else showAccount(acc);
   const st = await bs.installState();
   paintDownload(st);
   if (st.state === 'download' || st.state === 'list') watchInstall();

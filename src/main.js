@@ -163,7 +163,8 @@ const shellBg = () => (nativeTheme.shouldUseDarkColors ? '#14171d' : '#ffffff');
 
 function createLauncher() {
   launcher = new BrowserWindow({
-    width: 880, height: 580, frame: false, resizable: false, center: true,
+    width: 880, height: 580, minWidth: 880, minHeight: 580,
+    frame: false, resizable: true, center: true,
     backgroundColor: shellBg(), show: false,
     icon: path.join(__dirname, '..', 'build', 'icon.png'),
     webPreferences: {
@@ -643,7 +644,13 @@ ipcMain.handle('bs:account', async () => {
     if (!a?.name) { writeSettings({ token: '' }); return null; }
     account = a;
     return account;
-  } catch { return null; }
+  } catch (e) {
+    // Site injoignable : la session est peut-etre tres bien. On ne l'efface
+    // surtout pas, et on le dit a l'interface au lieu de faire croire a une
+    // deconnexion.
+    log.warn('vérification de session impossible : ' + e);
+    return { offline: true };
+  }
 });
 
 ipcMain.handle('bs:play', async () => {
