@@ -1,11 +1,14 @@
 /**
  * Pont minimal entre la page du jeu et le launcher.
- * Une seule capacité exposée : recharger le jeu. Rien d'autre n'est accessible
+ * Capacités exposées : recharger le jeu, le quitter, son mode d'affichage. Rien d'autre n'est accessible
  * depuis la page — pas de système de fichiers, pas de réseau privilégié.
  */
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('__bsRefresh', () => ipcRenderer.invoke('bs:refresh-game'));
+
+// Quitter le jeu (bouton ⏻ de la page, après confirmation) : ferme le launcher entier.
+contextBridge.exposeInMainWorld('__bsQuit', () => ipcRenderer.invoke('bs:quit'));
 
 // Le jeu peut détecter qu'il tourne dans le launcher (pour masquer un éventuel
 // bouton « télécharger le launcher » sur le site, par exemple).

@@ -290,6 +290,16 @@ async function openGame() {
 
   serveLocalAssets(game.webContents.session);
 
+  // A chaque lancement du jeu : cache vide (cache HTTP, service worker et ses fichiers, code et shaders compiles) — le jeu
+  // repart toujours de la derniere version publiee. La connexion (localStorage, cookies) et les ressources installees restent.
+  try {
+    const ses = game.webContents.session;
+    await ses.clearCache();
+    await ses.clearStorageData({ storages: ['serviceworkers', 'cachestorage', 'shadercache'] });
+    await ses.clearCodeCaches({}).catch(() => {});
+    log.info('cache du jeu vidé');
+  } catch (e) { log.warn('vidage du cache impossible : ' + e); }
+
   // Le jeton obtenu dans le launcher est déposé là où le client web le lit,
   // avant tout chargement : le joueur arrive déjà connecté.
   // On pose le jeton AVANT le premier rendu du document : le client web le lit
@@ -695,7 +705,9 @@ function serveLocalAssets(session) {
         const dir = installDir(), man = readManifest(dir);
         const v = man?.files?.[u.pathname];
         const want = u.searchParams.get('v') || '';
-        if (v !== undefined && (!want || want === v)) {
+        // (seulement une adresse versionnée, à la même version : un fichier demandé sans version — versions.json… — peut
+        // changer à tout moment, c'est toujours le réseau qui le donne)
+        if (v !== undefined && want && want === v) {
           const file = safeDest(dir, u.pathname);
           // Lecture asynchrone : le processus principal fait aussi tourner
           // l'interface, et le jeu demande ses modeles par centaines.
@@ -733,6 +745,7 @@ function serveLocalAssets(session) {
 // ------------------------------------------------------------------- Ponts
 ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });
 ipcMain.handle('bs:close', () => { hideToTray(); });
+ipcMain.handle('bs:quit', () => { log.info('quitter (bouton du jeu)'); quitApp(); });
 
 ipcMain.handle('bs:login', async (_e, { name, password }) => {
   try {
