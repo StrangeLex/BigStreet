@@ -389,6 +389,8 @@ async function openDrives() {
   paintDrives();
 }
 $('#installCog').onclick = openDrives;
+// Studio : une application à part, qui relit les records faits en jeu (menu Échap > Studio)
+$('#studioBtn').onclick = () => { bs.studio(); };
 $('#drvList').addEventListener('click', e => {
   const b = e.target.closest('.dk'); if (!b || migTimer) return;
   drvSel = b.dataset.l; paintDrives();

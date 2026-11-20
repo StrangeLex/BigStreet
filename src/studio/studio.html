@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Big Street Studio</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="stylesheet" href="/__studio/studio.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Colonne des records -->
+    <aside id="side">
+      <header>
+        <div class="brand">Big Street <b>Studio</b></div>
+        <div class="side-acts">
+          <button class="ib" id="refresh" title="Actualiser la liste">↻</button>
+          <button class="ib" id="folder" title="Ouvrir le dossier des records">📂</button>
+        </div>
+      </header>
+      <div id="recList" class="rec-list"></div>
+      <footer id="sideFoot"></footer>
+    </aside>
+
+    <!-- La scène -->
+    <main id="main">
+      <div id="stage">
+        <canvas id="view"></canvas>
+        <div id="overlay"></div>
+        <div id="letterbox" hidden><i></i><i></i></div>
+        <div id="empty" class="center-card">
+          <h1>Big Street <b>Studio</b></h1>
+          <p id="emptyText">Choisis un record dans la liste pour le revoir en 3D.</p>
+          <p class="muted">Pour en créer : en jeu, menu Échap → Studio → « Start Record » ou « Auto Record ».</p>
+        </div>
+        <div id="loading" class="center-card" hidden><div class="spin"></div><p id="loadingText">Chargement…</p></div>
+        <div id="topbar" hidden>
+          <button class="tb" id="toggleSide" title="Afficher ou cacher la liste des records (Tab)">☰</button>
+          <span class="tb-title" id="recTitle"></span>
+          <span class="grow"></span>
+          <button class="tb" id="goPlayer" title="Amener la caméra près du joueur enregistré (J)">🎯 Joueur</button>
+          <button class="tb" id="povBtn" title="Voir par les yeux du joueur enregistré (V)">👁 Vue du joueur</button>
+          <button class="tb" id="tagsBtn" title="Afficher ou cacher les pseudos et les bulles (N)">🏷 Pseudos</button>
+          <button class="tb" id="setBtn" title="Réglages de la vue">⚙ Vue</button>
+          <button class="tb" id="helpBtn" title="Commandes (H)">?</button>
+        </div>
+        <div id="settings" class="panel" hidden>
+          <h3>Vue</h3>
+          <label>Vitesse de la caméra <b id="spdV"></b><input type="range" id="spd" min="1" max="120" step="1"></label>
+          <label>Focale (champ de vision) <b id="fovV"></b><input type="range" id="fov" min="10" max="120" step="1"></label>
+          <label>Inclinaison <b id="rollV"></b><input type="range" id="roll" min="-45" max="45" step="1"></label>
+          <label>Distance d’affichage <b id="distV"></b><input type="range" id="dist" min="60" max="600" step="10"></label>
+          <label class="row"><input type="checkbox" id="ultra"> Rendu « Ultra » (ombres douces, halos)</label>
+          <label class="row"><input type="checkbox" id="bars"> Bandes de cinéma</label>
+        </div>
+        <div id="help" class="panel" hidden>
+          <h3>Commandes</h3>
+          <table>
+            <tr><td>Clic sur la vue</td><td>prendre la caméra (Échap pour la lâcher)</td></tr>
+            <tr><td>Z Q S D / W A S D</td><td>avancer, reculer, aller de côté</td></tr>
+            <tr><td>Espace · Ctrl ou C</td><td>monter · descendre</td></tr>
+            <tr><td>Maj · Molette</td><td>aller vite · régler la vitesse</td></tr>
+            <tr><td>Clic droit maintenu</td><td>tourner la vue sans prendre la caméra</td></tr>
+            <tr><td>Espace (caméra lâchée)</td><td>lecture / pause</td></tr>
+            <tr><td>← →</td><td>reculer / avancer de 2 s</td></tr>
+            <tr><td>K</td><td>poser une caméra à cet instant</td></tr>
+            <tr><td>P</td><td>prévisualiser la cinématique</td></tr>
+            <tr><td>J · V · N · Tab</td><td>aller au joueur · vue du joueur · pseudos · liste</td></tr>
+          </table>
+        </div>
+        <div id="hint" hidden></div>
+        <div id="recDot" hidden><i></i> EXPORT</div>
+      </div>
+
+      <!-- Frise chronologique et caméras -->
+      <section id="dock" hidden>
+        <div class="tl-row">
+          <button class="play" id="play" title="Lecture / pause (Espace)">▶</button>
+          <span class="time" id="time">0:00.0 / 0:00.0</span>
+          <div id="timeline"><div id="tlFill"></div><div id="tlPath"></div><div id="tlMarks"></div><div id="tlHead"></div></div>
+          <select id="rate" title="Vitesse de lecture">
+            <option value="0.1">0,1×</option><option value="0.25">0,25×</option><option value="0.5">0,5×</option>
+            <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
+          </select>
+        </div>
+        <div class="cam-row">
+          <button class="btn accent" id="addCam" title="Poser une caméra ici, à cet instant (K)">＋ Poser une caméra</button>
+          <div id="camList" class="cam-list"></div>
+          <span class="grow"></span>
+          <button class="btn" id="preview" title="Prévisualiser la cinématique (P)">🎬 Prévisualiser</button>
+          <button class="btn" id="saveProj" title="Enregistrer le projet de cinématique à côté du record">💾 Enregistrer</button>
+          <button class="btn" id="export" title="Exporter la cinématique en vidéo (.webm)">⏺ Exporter en vidéo</button>
+        </div>
+        <div id="camEdit" class="cam-edit" hidden>
+          <b id="ceName"></b>
+          <label>Instant (s) <input type="number" id="ceT" step="0.1" min="0"></label>
+          <label>Focale <input type="number" id="ceFov" step="1" min="10" max="120"></label>
+          <label>Inclinaison <input type="number" id="ceRoll" step="1" min="-45" max="45"></label>
+          <label>Vers la suivante
+            <select id="ceEase">
+              <option value="fluide">travelling fluide</option><option value="doux">départ et arrivée en douceur</option>
+              <option value="accel">accélère</option><option value="frein">ralentit</option><option value="fixe">plan fixe (coupe)</option>
+            </select></label>
+          <button class="btn small" id="ceHere" title="Remplacer la position de cette caméra par la vue actuelle">📍 Reprendre la vue actuelle</button>
+          <button class="btn small" id="ceNow" title="Placer cette caméra à l'instant courant de la frise">⏱ À l’instant courant</button>
+          <button class="btn small danger" id="ceDel">🗑 Supprimer</button>
+        </div>
+      </section>
+    </main>
+  </div>
+  <div id="toasts"></div>
+  <script type="module" src="/__studio/studio.js"></script>
+</body>
+</html>

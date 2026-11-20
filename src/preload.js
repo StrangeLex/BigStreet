@@ -1,7 +1,8 @@
 /**
  * Pont minimal entre la page du jeu et le launcher.
- * Capacités exposées : recharger le jeu, le quitter, son mode d'affichage. Rien d'autre n'est accessible
- * depuis la page — pas de système de fichiers, pas de réseau privilégié.
+ * Capacités exposées : recharger le jeu, le quitter, son mode d'affichage, et l'enregistrement du Studio
+ * (la page envoie le contenu d'un record ; le launcher choisit seul le fichier, dans son dossier Studio).
+ * Rien d'autre n'est accessible depuis la page — aucun chemin de fichier, pas de réseau privilégié.
  */
 const { contextBridge, ipcRenderer } = require('electron');
 
@@ -25,4 +26,15 @@ contextBridge.exposeInMainWorld('__bsLauncher', {
 contextBridge.exposeInMainWorld('__bsDisplay', {
   get: () => ipcRenderer.invoke('bs:display-get'),
   set: mode => ipcRenderer.invoke('bs:display-set', mode),
+});
+
+// Studio : enregistrer ce que le jeu affiche autour du joueur (menu Échap > Studio). La page ne fait qu'ouvrir un
+// record, envoyer des morceaux de texte et le refermer ; le nom et l'emplacement du fichier (« .bsrec », dans
+// Documents/Big Street/Studio), sa taille et sa durée maximales sont décidés par le launcher (studio-main.js).
+contextBridge.exposeInMainWorld('__bsStudio', {
+  v: 1,
+  start: meta => ipcRenderer.invoke('bs:rec-start', meta),
+  chunk: text => { ipcRenderer.send('bs:rec-chunk', text); },
+  stop: meta => ipcRenderer.invoke('bs:rec-stop', meta),
+  openFolder: () => ipcRenderer.invoke('bs:rec-folder'),
 });

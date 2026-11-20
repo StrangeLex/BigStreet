@@ -289,6 +289,7 @@ async function openGame() {
   game.on('page-title-updated', e => e.preventDefault());
 
   serveLocalAssets(game.webContents.session);
+  studio.watchGame(game);   // (un record en cours est referme si la fenetre se ferme ou se recharge)
 
   // A chaque lancement du jeu : cache vide (cache HTTP, service worker et ses fichiers, code et shaders compiles) — le jeu
   // repart toujours de la derniere version publiee. La connexion (localStorage, cookies) et les ressources installees restent.
@@ -423,6 +424,7 @@ function trayMenu() {
   return Menu.buildFromTemplate([
     { label: 'Ouvrir Big Street', click: showMain },
     { label: 'Amis', click: () => { showMain(); showFriends(); } },
+    { label: 'Studio', click: () => studio.openStudio() },   // (les records se relisent sans connexion, donc sans passer par l'ecran de lancement)
     { type: 'separator' },
     { label: 'Lancer au démarrage de Windows', type: 'checkbox', checked: readSettings().autoStart,
       enabled: process.platform === 'win32' && app.isPackaged,
@@ -741,6 +743,10 @@ function serveLocalAssets(session) {
   });
   log.info('ressources locales actives');
 }
+
+// ------------------------------------------------------------------ Studio
+// Records du jeu (pont « __bsStudio » de la fenetre de jeu) et fenetre « Big Street Studio » : cf. studio-main.js
+const studio = require('./studio-main.js')({ SITE, log, getGame: () => game, getLauncher: () => launcher, installDir, readManifest, safeDest });
 
 // ------------------------------------------------------------------- Ponts
 ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });
@@ -1240,7 +1246,7 @@ function updateThenStart() {
 // Controles automatiques (tools/selftest.mjs) : le module expose ses rouages
 // et n'ouvre aucune fenetre.
 if (process.env.BS_SELFTEST) {
-  module.exports = { serveLocalAssets, safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
+  module.exports = { studio, openGame, serveLocalAssets, safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
 }
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {

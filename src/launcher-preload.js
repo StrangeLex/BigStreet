@@ -50,6 +50,9 @@ contextBridge.exposeInMainWorld('bs', {
   onFriendsChanged: cb => ipcRenderer.on('bs:friends-changed', () => cb()),
   onShowFriends: cb => ipcRenderer.on('bs:show-friends', () => cb()),
 
+  // Studio : ouvre la fenêtre « Big Street Studio » (relecture des records, caméras, travellings)
+  studio: () => ipcRenderer.invoke('bs:studio-open'),
+
   version: () => ipcRenderer.invoke('bs:version'),
   uninstall: () => ipcRenderer.invoke('bs:uninstall'),
 });

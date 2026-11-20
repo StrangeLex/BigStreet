@@ -68,7 +68,8 @@ Ce document est la référence ; le code est dans `src/`, et il est public.
 - **Aucun identifiant embarqué** : il ne contient ni clé, ni jeton, ni secret.
   Les mises à jour sont publiques et anonymes, vérifie-le toi-même.
 - **Aucun accès à tes fichiers**, hors son propre dossier d'installation et de
-  journal. Le rendu web tourne en bac à sable (`sandbox: true`,
+  journal, et le dossier `Documents\Big Street\Studio` où vont tes records
+  (voir « Studio » plus bas). Le rendu web tourne en bac à sable (`sandbox: true`,
   `nodeIntegration: false`, `contextIsolation: true`).
 - Il **ne touche à rien d'autre** que son propre dossier, avec deux
   exceptions : l'entrée de démarrage avec Windows (voir plus haut), et sous Windows, il règle Big Street en « Hautes performances »
@@ -115,6 +116,37 @@ PowerShell (`Get-Volume`, `Get-PhysicalDisk`). Rien n'est écrit à ce moment-l�
 Si tu choisis un autre disque, les ressources y sont copiées fichier par
 fichier et vérifiées. L'ancienne copie n'est effacée qu'après. Si quelque chose
 échoue en route, le jeu reste à son ancien emplacement.
+
+## Studio : les records et la fenêtre « Big Street Studio »
+
+En jeu, le menu Échap a un onglet **Studio** (seulement dans le launcher) :
+« Start Record », « Stop Record », « Auto Record » et la distance de record.
+Rien ne s'enregistre tant que tu ne l'as pas demandé.
+
+- **Ce qui est enregistré** : ce que le jeu affiche déjà autour de ton
+  personnage — le lieu, les personnages (position, tenue, gestes, bulles de
+  dialogue), les véhicules, les objets, l'heure du jeu — dans le rayon choisi.
+  Ni ton écran, ni ton micro, ni ton sac, ton argent, tes SMS ou ton compte.
+- **Où** : dans `Documents\Big Street\Studio`, un fichier `.bsrec` par lieu
+  traversé (format décrit dans `src/records.js` : un en-tête lisible, puis des
+  lignes JSON compressées). Le projet de cinématique (`.bsproj`) et les vidéos
+  exportées (`.webm`) se rangent à côté. **Rien n'est envoyé nulle part.**
+- **Comment** : la page du jeu ne peut qu'ouvrir un record, envoyer son contenu
+  et le refermer. Elle ne choisit ni le nom ni l'emplacement du fichier ; le
+  launcher les fixe, n'en ouvre qu'un à la fois et le referme si le jeu se
+  ferme. Le jeu arrête de lui-même un record au bout de 20 minutes ; le
+  launcher, de son côté, n'accepte rien au-delà de 400 Mo bruts ou 30 minutes.
+- Le bouton **Studio** du launcher ouvre une application à part, qui relit ces
+  records en 3D : caméra libre, caméras posées, travellings, export vidéo.
+  Cette fenêtre **n'a pas accès au site** : ni compte, ni API, ni connexion au
+  serveur de jeu. Elle ne peut demander que son interface (`src/studio`), tes
+  records, et le moteur d'affichage du jeu (scripts de rendu, modèles, plan de
+  la ville). Ce moteur est pris sur le site quand il répond, et gardé en copie
+  dans `%APPDATA%\Big Street\studio-cache` : le Studio marche ensuite hors
+  ligne (il s'ouvre aussi depuis l'icône près de l'horloge, sans connexion).
+  Les modèles déjà installés (« Installer le jeu ») sont réutilisés.
+- Supprimer un record depuis le Studio supprime son fichier (et son projet),
+  après confirmation. Tu peux aussi vider le dossier toi-même.
 
 ## Le jeu n'est pas dans le launcher
 

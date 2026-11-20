@@ -116,6 +116,10 @@
   .hero .cog{width:42px;height:42px;flex:none;border-radius:11px;border:1px solid rgba(255,255,255,.35);
     background:rgba(0,0,0,.38);color:#fff;cursor:pointer;font-size:16px;line-height:1}
   .hero .cog:hover{background:rgba(0,0,0,.6)}
+  .hero .cog.studio{width:auto;padding:0 13px;font-size:13.5px;letter-spacing:.01em}
+  .hero .acts:has(.studio){gap:7px}
+  .hero .acts:has(.studio) .cta{padding:12px 16px}
+  .hero .cog.studio b{font-weight:800}
   .hero .state{position:absolute;left:22px;right:22px;bottom:98px;font-size:12px;
     color:rgba(255,255,255,.88);text-shadow:0 1px 8px rgba(0,0,0,.85)}
   .hero .mini{position:absolute;left:22px;right:22px;bottom:88px;height:6px;border-radius:4px;
@@ -320,6 +324,7 @@
           </div>
           <span class="grow"></span>
           <div class="acts">
+            <button class="cog studio" id="studioBtn" title="Studio : revoir ses records, poser des caméras, faire des travellings"><b>Studio</b></button>
             <button class="cog" id="installCog" title="Disque d'installation">⚙</button>
             <button class="cta" id="install"
                     style="background:rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.35)">Installer le jeu</button>
