@@ -144,17 +144,17 @@ jobs:
           for b in out/*.blockmap; do [ -e "$b" ] && files+=("$b"); done
           gh release create "v$v" "${files[@]}" --title "$v" --notes-file notes.md --verify-tag
 
-      # Les releases s'accumulent à chaque déploiement. On ne garde que les
-      # trois dernières : la version en cours et deux retours arrière possibles.
+      # Les releases s'accumulent à chaque déploiement. Tant que le jeu n'est pas
+      # fini (demande de Lex, 20/11), on ne garde que la dernière version.
       # (Supprimer une release retire aussi le paquet que son installeur web
       # allait chercher : un vieux .exe encore sur un disque ne pourra plus
       # s'installer. C'est le prix du ménage, et c'est voulu.)
-      - name: Ne garder que les 3 dernières versions
+      - name: Ne garder que la dernière version
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           vieilles=$(gh release list --limit 100 --json tagName,createdAt \
-            --jq 'sort_by(.createdAt) | reverse | .[3:] | .[].tagName')
+            --jq 'sort_by(.createdAt) | reverse | .[1:] | .[].tagName')
           if [ -z "$vieilles" ]; then echo "rien à supprimer"; exit 0; fi
           for t in $vieilles; do
             echo "suppression de $t"
