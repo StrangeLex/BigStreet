@@ -41,6 +41,8 @@ try {
   await new Promise(r => win.webContents.once('did-finish-load', r));
   console.log('page chargée');
   const ev = js => win.webContents.executeJavaScript(js, true);
+  // (rendu logiciel : on attend que n images aient vraiment été calculées avant une capture)
+  const drawn = async (n = 3) => { const a = (await ev(`__studio.state.images`)) || 0; for (let i = 0; i < 80; i++) { await wait(250); if (((await ev(`__studio.state.images`)) || 0) >= a + n) break; } await wait(150); };
   const shot = async file => { const img = await win.webContents.capturePage(); writeFileSync(path.join(outDir, file), img.toPNG()); console.log('  capture', path.join(outDir, file)); };
   await ev(`localStorage.setItem('cubik.gfx', JSON.stringify({ ultra: ${process.env.ULTRA === '1'}, aa: false, res: 'auto', fps: 0 })), 1`);
   await wait(800);
@@ -72,15 +74,50 @@ try {
   { const c0 = (await ev(`__studio.state`)).cam; win.webContents.focus();
     win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'W' }); await wait(700); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'W' });
     const c1 = (await ev(`__studio.state`)).cam; console.log('caméra libre : avancée de', Math.hypot(c1.x - c0.x, c1.y - c0.y, c1.z - c0.z).toFixed(2), 'case(s)'); await ev(`__studio.set(${JSON.stringify(c0)}), 1`); }
-  // deux caméras, puis la vue du travelling à mi-chemin
-  await ev(`(() => { const s = __studio.state, c = s.cam; __studio.seek(${+at * 1000}); __studio.addCam(); __studio.set({ x: c.x + 3, y: c.y + 2.5, z: c.z - 2, yaw: c.yaw + 0.5, pitch: -0.45, fov: 40 }); return 1; })()`);
-  await wait(400);
-  await ev(`(() => { const s = __studio.state; __studio.seek(Math.min(s.dur, ${+at * 1000} + 4000)); return 1; })()`); await wait(600);
-  await ev(`__studio.addCam(), 1`); await wait(300);
-  await ev(`__studio.startCine(), 1`); await wait(2500);
-  console.log('cinématique :', JSON.stringify(await ev(`__studio.state`)));
-  console.log('rendu :', JSON.stringify(await ev(`(() => { const w = __studio.world, gl = w.renderer.getContext(), i = w.renderer.info; return { contextePerdu: gl.isContextLost(), triangles: i.render.triangles, appels: i.render.calls, geometries: i.memory.geometries, textures: i.memory.textures, nuit: +(w.night || 0).toFixed(2), heure: +w.gameHourNow().toFixed(2), brouillard: [w.fogObj.near, w.fogObj.far], fond: w.scene.background?.getHexString?.() }; })()`)));
-  await shot('studio-travelling.png');
+  // Caméras : une caméra animée (deux clés, filtre nocturne), une caméra attachée au joueur (filtre thermique), puis les captures
+  if (process.env.CAM) await ev(`__studio.set(${process.env.CAM}), 1`);
+  const c0 = (await ev(`__studio.state`)).cam, tK = +at * 1000;
+  // (les caméras sont posées devant le point de vue de départ, pour qu'on les voie depuis lui)
+  const at3 = (f, r, u, o = {}) => `(() => { const c = ${JSON.stringify(c0)}, fx = Math.cos(c.yaw), fz = Math.sin(c.yaw); __studio.set({ ...c, x: c.x + fx * ${f} - fz * ${r}, z: c.z + fz * ${f} + fx * ${r}, y: c.y + ${u}, ...${JSON.stringify(o)} }); return 1; })()`;
+  await ev(at3(3.2, -1.4, -1.2, { pitch: -0.12 })); await ev(`__studio.seek(${tK}), __studio.addCam(), 1`); await wait(300);
+  await ev(at3(4.6, -0.2, -0.9, { pitch: -0.2, yaw: c0.yaw + 0.5 })); await ev(`__studio.seek(Math.min(__studio.state.dur, ${tK} + 4000)), 1`); await wait(700);
+  await ev(`__studio.addKey(), 1`); await wait(300);
+  const who = process.env.PARENT || (await ev(`__studio.parents()[0]`));
+  await ev(at3(3.0, 1.5, -1.0, { pitch: -0.1 })); await ev(`__studio.seek(${tK} + 1000), __studio.addCam(), 1`); await wait(300);
+  await ev(`(() => { const C = __studio.cams; C[0].name = 'Plan large'; C[0].filter = 'nuit'; C[1].name = 'Suiveuse'; C[1].filter = 'thermique'; __studio.setParent(1, ${JSON.stringify(who)}); C[1].look = true; __studio.refreshUi(); return 1; })()`);
+  await ev(at3(0, 0, 0)); await ev(`__studio.seek(${tK} + 2000), 1`);
+  // (pistes par paramètre : la première caméra dépliée, avec des clés propres à la FOV, au roulis et à la vignette)
+  await ev(`(() => { const S = __studio, t = ${tK} / 1000; S.cams[0].open = true; S.setKey(0, 'fov', t + 1.2, 38); S.setKey(0, 'fov', t + 3.1, 82); S.setKey(0, 'roll', t + 2, 0.2); S.setKey(0, 'vignette', t, 0); S.setKey(0, 'vignette', t + 4, 0.8); S.selectCam(S.cams[0].id, 'fov', Math.round((t + 1.2) * 1000)); return 1; })()`);
+  await drawn();
+  console.log('pistes :', JSON.stringify(await ev(`(() => { const c = __studio.cams[0]; return { parParametre: Object.fromEntries(Object.entries(c.tracks).map(([k, L]) => [k, L.length])), lignes: document.querySelectorAll('.lane').length, sousLignes: document.querySelectorAll('.lane.sub').length, fovA: [${tK} / 1000, ${tK} / 1000 + 1.2, ${tK} / 1000 + 2, ${tK} / 1000 + 4].map(t => +__studio.valAt(0, 'fov', t).toFixed(1)), xA: [${tK} / 1000, ${tK} / 1000 + 2, ${tK} / 1000 + 4].map(t => +__studio.valAt(0, 'x', t).toFixed(2)), losangesPleins: document.querySelectorAll('#props .kd.on').length, cleChoisie: document.querySelector('#pKeyWhat').textContent }; })()`)));
+  await shot('studio-pistes.png');
+  // (champ FOV modifié à un instant sans clé : une clé apparaît sur la seule ligne FOV)
+  console.log('champ FOV :', JSON.stringify(await ev(`(() => { const S = __studio, c = S.cams[0], n = k => c.tracks[k].length, a = [n('fov'), n('x')]; S.seek(${tK} + 2500); return new Promise(r => setTimeout(() => { const f = document.getElementById('pFov'); f.value = '55'; f.dispatchEvent(new Event('input')); r({ avant: a, apres: [n('fov'), n('x')], fov: +S.valAt(0, 'fov', (${tK} + 2500) / 1000).toFixed(1) }); }, 1500)); })()`)));
+  await ev(`(__studio.selectCam(__studio.cams[1].id), __studio.seek(${tK} + 2000), 1)`);
+  await wait(2500);
+  console.log('caméras :', JSON.stringify(await ev(`(() => { const s = __studio.state; return { cams: s.cams, cles: s.keys, sel: s.sel, poignees: s.poignees, parent: __studio.cams[1].parent, suiveuse: (p => p && [+p.x.toFixed(2), +p.y.toFixed(2), +p.z.toFixed(2), +p.yaw.toFixed(2), p.lost])(__studio.pose(1)), pistes: document.querySelectorAll('.lane').length, clesAffichees: document.querySelectorAll('.kf').length, etiquettes: [...document.querySelectorAll('.cam-label')].map(e => e.textContent), champs: ['pX', 'pY', 'pZ', 'pYaw', 'pPitch', 'pRoll', 'pFov'].map(i => document.getElementById(i).value), parentAffiche: document.querySelector('#pParentInfo').textContent }; })()`)));
+  await drawn(); await shot('studio-cameras.png');
+  // coordonnées changées au clavier : X + 0,5 dans le champ → la caméra suit
+  console.log('champ X :', JSON.stringify(await ev(`(() => { const f = document.getElementById('pX'), a = __studio.pose(1).x; f.value = (parseFloat(f.value) + 0.5).toFixed(2); f.dispatchEvent(new Event('input')); const b = __studio.pose(1).x; f.value = (parseFloat(f.value) - 0.5).toFixed(2); f.dispatchEvent(new Event('input')); return { avant: +a.toFixed(2), apres: +b.toFixed(2), remis: +__studio.pose(1).x.toFixed(2) }; })()`)));
+  // déplacement au clavier (G puis X), annulé par Échap, puis rotation des poignées
+  await ev(`(__studio.selectCam(__studio.cams[0].id), __studio.modalStart('G'), 1)`); await wait(300);
+  console.log('G :', await ev(`document.querySelector('#modal').textContent`));
+  win.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' }); win.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' }); await wait(300);
+  await ev(`document.querySelector('#gRot').click(), 1`); await wait(1500);
+  await drawn(); await shot('studio-rotation.png');
+  await ev(`document.querySelector('#gMove').click(), 1`);
+  // à travers chaque caméra : vision nocturne, puis thermique (attachée au joueur)
+  await ev(`(__studio.selectCam(__studio.cams[0].id), __studio.setMode('cam'), 1)`); await wait(2500);
+  console.log('vue caméra 1 :', JSON.stringify(await ev(`(s => ({ mode: s.mode, filtre: s.filtre }))(__studio.state)`)));
+  await drawn(); await shot('studio-nocturne.png');
+  await ev(`(__studio.setMode('free'), __studio.selectCam(__studio.cams[1].id), __studio.setMode('cam'), 1)`); await wait(2500);
+  console.log('vue caméra 2 :', JSON.stringify(await ev(`(s => ({ mode: s.mode, filtre: s.filtre }))(__studio.state)`)));
+  await drawn(); await shot('studio-thermique.png');
+  if (process.env.FILTRE) { await ev(`(__studio.cams[1].filter = ${JSON.stringify(process.env.FILTRE)}, __studio.cams[1].dof = 0.8, __studio.cams[1].vignette = 0.5, 1)`); await drawn(); await shot('studio-filtre.png'); await ev(`(__studio.cams[1].filter = 'thermique', __studio.cams[1].dof = 0, __studio.cams[1].vignette = 0, 1)`); }
+  await ev(`(__studio.setMode('free'), __studio.startCine(), 1)`); await wait(2500);
+  console.log('cinématique :', JSON.stringify(await ev(`(s => ({ T: Math.round(s.T), mode: s.mode, filtre: s.filtre }))(__studio.state)`)));
+  await drawn(); await shot('studio-travelling.png');
+  await ev(`(__studio.play(false), __studio.setMode('free'), 1)`); await wait(2200);
   if (process.env.EXPORT === '1') {   // (export vidéo : la cinématique rejouée et filmée)
     await ev(`__studio.play(false), document.querySelector('#export').click(), 1`);
     for (let i = 0; i < 60; i++) { await wait(1000); if (!(await ev(`!!document.querySelector('#export.on')`))) break; }

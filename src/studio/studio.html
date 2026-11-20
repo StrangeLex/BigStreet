@@ -62,47 +62,76 @@
             <tr><td>Clic droit maintenu</td><td>tourner la vue sans prendre la caméra</td></tr>
             <tr><td>Espace (caméra lâchée)</td><td>lecture / pause</td></tr>
             <tr><td>← →</td><td>reculer / avancer de 2 s</td></tr>
-            <tr><td>K</td><td>poser une caméra à cet instant</td></tr>
+            <tr><td>Maj+K · K</td><td>nouvelle caméra · image-clé de la caméra sélectionnée</td></tr>
+            <tr><td>Clic sur une caméra</td><td>la sélectionner (poignées de déplacement)</td></tr>
+            <tr><td>G · R</td><td>déplacer · tourner la caméra (X, Y, Z : contraindre ; clic : valider ; Échap : annuler)</td></tr>
+            <tr><td>0</td><td>vue à travers la caméra sélectionnée</td></tr>
+            <tr><td>Suppr</td><td>supprimer la clé sélectionnée</td></tr>
             <tr><td>P</td><td>prévisualiser la cinématique</td></tr>
             <tr><td>J · V · N · Tab</td><td>aller au joueur · vue du joueur · pseudos · liste</td></tr>
           </table>
         </div>
+        <div id="props" class="panel" hidden>
+          <div class="p-title"><i id="pDot"></i><input id="pName" class="p-name" maxlength="40" title="Nom de la caméra" spellcheck="false"><input type="color" id="pColor" title="Couleur de la caméra"></div>
+          <label class="row"><input type="checkbox" id="pOn"> Active dans la cinématique</label>
+          <h4>Position et orientation <small id="pWhen" class="muted"></small></h4>
+          <div class="p-grid">
+            <label><span class="drag ax-x" data-f="pX" data-s="0.05">X</span><input type="number" id="pX" step="0.1"></label>
+            <label><span class="drag ax-y" data-f="pY" data-s="0.05">Y</span><input type="number" id="pY" step="0.1"></label>
+            <label><span class="drag ax-z" data-f="pZ" data-s="0.05">Z</span><input type="number" id="pZ" step="0.1"></label>
+            <label><span class="drag" data-f="pYaw" data-s="0.5">Lacet °</span><input type="number" id="pYaw" step="1"></label>
+            <label><span class="drag" data-f="pPitch" data-s="0.5">Tangage °</span><input type="number" id="pPitch" step="1" min="-89" max="89"></label>
+            <label><span class="drag" data-f="pRoll" data-s="0.5">Roulis °</span><input type="number" id="pRoll" step="1"></label>
+            <label><span class="drag" data-f="pFov" data-s="0.25">FOV °</span><input type="number" id="pFov" step="1" min="5" max="130"></label>
+          </div>
+          <small class="muted" id="pNote"></small>
+          <h4>Image-clé <small id="pKeyWhat" class="muted"></small></h4>
+          <div class="p-grid">
+            <label><span class="drag" data-f="pT" data-s="0.05">Instant s</span><input type="number" id="pT" step="0.1" min="0"></label>
+            <label class="wide"><span>Vers la suivante</span><select id="pEase"></select></label>
+          </div>
+          <div class="p-btns"><button class="btn small" id="pKey" title="Créer ou mettre à jour la clé de cet instant d’après la vue actuelle (K)">◆ Clé d’après la vue</button><button class="btn small danger" id="pKeyDel" title="Supprimer la clé sélectionnée (Suppr)">Supprimer la clé</button></div>
+          <h4>Parent</h4>
+          <label><input id="pParent" list="parentList" placeholder="Pseudo, nom de PNJ, véhicule ou caméra…" spellcheck="false" title="Tape ou choisis un nom, puis Entrée ; vide = aucun parent"><datalist id="parentList"></datalist></label>
+          <div id="pParentInfo" class="p-parent"></div>
+          <label class="row"><input type="checkbox" id="pFollow"> Tourner avec le parent</label>
+          <label class="row"><input type="checkbox" id="pLook"> Regarder le parent</label>
+          <h4>Filtre</h4>
+          <label><select id="pFilter"></select></label>
+          <label>Vignette <b id="pVignetteV"></b><input type="range" id="pVignette" min="0" max="1" step="0.05"></label>
+          <label>Grain <b id="pGrainV"></b><input type="range" id="pGrain" min="0" max="1" step="0.05"></label>
+          <label>Flou de profondeur <b id="pDofV"></b><input type="range" id="pDof" min="0" max="1" step="0.05"></label>
+          <div class="p-btns"><button class="btn small" id="pView">🎥 Vue caméra</button><button class="btn small" id="pDup" title="Dupliquer cette caméra">Dupliquer</button><button class="btn small danger" id="pDelCam">🗑 Supprimer la caméra</button></div>
+        </div>
+        <div id="modal" hidden></div>
         <div id="hint" hidden></div>
         <div id="recDot" hidden><i></i> EXPORT</div>
       </div>
 
-      <!-- Frise chronologique et caméras -->
+      <!-- Frise chronologique : une piste par caméra -->
       <section id="dock" hidden>
         <div class="tl-row">
           <button class="play" id="play" title="Lecture / pause (Espace)">▶</button>
           <span class="time" id="time">0:00.0 / 0:00.0</span>
-          <div id="timeline"><div id="tlFill"></div><div id="tlPath"></div><div id="tlMarks"></div><div id="tlHead"></div></div>
           <select id="rate" title="Vitesse de lecture">
             <option value="0.1">0,1×</option><option value="0.25">0,25×</option><option value="0.5">0,5×</option>
             <option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option>
           </select>
-        </div>
-        <div class="cam-row">
-          <button class="btn accent" id="addCam" title="Poser une caméra ici, à cet instant (K)">＋ Poser une caméra</button>
-          <div id="camList" class="cam-list"></div>
+          <span class="sep"></span>
+          <button class="btn accent" id="addCam" title="Poser une nouvelle caméra ici, à cet instant (Maj+K)">＋ Caméra</button>
+          <button class="btn" id="addKey" title="Poser une image-clé de la caméra sélectionnée à cet instant, d’après la vue actuelle (K)">◆ Clé</button>
+          <button class="btn" id="gMove" title="Déplacer la caméra sélectionnée (G, puis X / Y / Z pour contraindre)">✥ Déplacer</button>
+          <button class="btn" id="gRot" title="Tourner la caméra sélectionnée (R, puis X / Y / Z)">⟳ Tourner</button>
+          <button class="btn" id="camView" title="Regarder à travers la caméra sélectionnée (0) — Échap ou un déplacement pour revenir en caméra libre">🎥 Vue caméra</button>
           <span class="grow"></span>
-          <button class="btn" id="preview" title="Prévisualiser la cinématique (P)">🎬 Prévisualiser</button>
-          <button class="btn" id="saveProj" title="Enregistrer le projet de cinématique à côté du record">💾 Enregistrer</button>
-          <button class="btn" id="export" title="Exporter la cinématique en vidéo (.webm)">⏺ Exporter en vidéo</button>
+          <button class="btn" id="preview" title="Prévisualiser la cinématique : les caméras actives s’enchaînent (P)">🎬 Prévisualiser</button>
+          <button class="btn" id="saveProj" title="Enregistrer le projet de cinématique à côté du record">💾</button>
+          <button class="btn" id="export" title="Exporter la cinématique en vidéo (.webm)">⏺ Exporter</button>
         </div>
-        <div id="camEdit" class="cam-edit" hidden>
-          <b id="ceName"></b>
-          <label>Instant (s) <input type="number" id="ceT" step="0.1" min="0"></label>
-          <label>Focale <input type="number" id="ceFov" step="1" min="10" max="120"></label>
-          <label>Inclinaison <input type="number" id="ceRoll" step="1" min="-45" max="45"></label>
-          <label>Vers la suivante
-            <select id="ceEase">
-              <option value="fluide">travelling fluide</option><option value="doux">départ et arrivée en douceur</option>
-              <option value="accel">accélère</option><option value="frein">ralentit</option><option value="fixe">plan fixe (coupe)</option>
-            </select></label>
-          <button class="btn small" id="ceHere" title="Remplacer la position de cette caméra par la vue actuelle">📍 Reprendre la vue actuelle</button>
-          <button class="btn small" id="ceNow" title="Placer cette caméra à l'instant courant de la frise">⏱ À l’instant courant</button>
-          <button class="btn small danger" id="ceDel">🗑 Supprimer</button>
+        <div id="tracks">
+          <div class="tr-head ruler-head"><span class="muted">Caméras</span></div>
+          <div id="timeline" title="Cliquer ou glisser pour se déplacer dans le temps"><div id="tlFill"></div><div id="tlTicks"></div><div id="tlHead"></div></div>
+          <div id="trackRows"></div>
         </div>
       </section>
     </main>
