@@ -74,76 +74,93 @@ export function webmWriter(sink, o) {
 const box = (type, ...p) => { const b = cat(p.flat()); return cat([u32(b.length + 8), ascii(type), b]); };
 const full = (type, v, f, ...p) => box(type, u8(v), u8(f >> 16), u16(f & 0xffff), ...p);
 const MATRIX = [0x10000, 0, 0, 0, 0x10000, 0, 0, 0, 0x40000000].map(u32);
+const runs = L => { const R = []; for (const x of L) { const r = R[R.length - 1]; if (r && r[1] === x) r[0]++; else R.push([1, x]); } return R; };
+/** Un descripteur MPEG-4 (esds) : étiquette, longueur sur 4 octets, contenu */
+const desc = (tag, ...p) => { const b = cat(p.flat()), n = b.length; return cat([u8(tag), Uint8Array.of(0x80 | ((n >> 21) & 127), 0x80 | ((n >> 14) & 127), 0x80 | ((n >> 7) & 127), n & 127), b]); };
 /**
- * MP4 vidéo seule, H.264 (« avcC » donné par l'encodeur dans decoderConfig.description). o : { width, height, fps }.
- * add(octets AVCC, horodatage µs, clé ?, description ?) ; les métadonnées (moov) sont écrites à la fin.
+ * MP4, H.264 (« avcC » donné par l'encodeur dans decoderConfig.description), et une piste son facultative.
+ * o : { width, height, fps, audio: { codec: 'aac' | 'opus', rate, channels, config (AudioSpecificConfig AAC, ou « OpusHead ») } }.
+ * add(octets AVCC, horodatage µs, clé ?, description ?) ; addAudio(octets, durée en échantillons) — le son est donné AVANT les images
+ * (il est rangé au début des données) ; les métadonnées (moov) sont écrites à la fin.
  */
 export function mp4Writer(sink, o) {
-  const w = out(sink), TS = 90000, delta = Math.round(TS / o.fps);
+  const w = out(sink), TS = 90000, delta = Math.round(TS / o.fps), A = o.audio || null;
   w.put(box('ftyp', ascii('isom'), u32(512), ascii('isom'), ascii('iso2'), ascii('avc1'), ascii('mp41')));
   const mdatAt = w.pos; w.put(cat([u32(1), ascii('mdat'), u64(0)]));
-  const S = []; let avcC = null;
+  const S = [], AS = []; let avcC = null;
   return {
     add(data, tsUs, key, description) { if (description && !avcC) avcC = new Uint8Array(description); S.push({ off: w.pos, size: data.length, key: !!key, pts: Math.round(tsUs * TS / 1e6) }); w.put(data); },
+    addAudio(data, samples) { if (!A) return; AS.push({ off: w.pos, size: data.length, dur: Math.max(1, Math.round(samples)) }); w.put(data); },
     finish() {
       if (!avcC) throw new Error('MP4 : configuration H.264 absente (aucune image encodée ?)');
       w.at(mdatAt + 8, u64(w.pos - mdatAt));
       const n = S.length, durTS = n * delta, durMs = Math.round(n * 1000 / o.fps), now = Math.floor(Date.now() / 1000) + 2082844800;
       // (images B : décalage d'affichage par image — ctts — ; sinon rien)
       const offs = S.map((s, i) => s.pts - i * delta), minOff = Math.min(0, ...offs), shift = -minOff, needCtts = offs.some(x => x !== offs[0]) || offs[0] !== 0;
-      const runs = []; for (const x of offs) { const v = x + shift, r = runs[runs.length - 1]; if (r && r[1] === v) r[0]++; else runs.push([1, v]); }
+      const R = runs(offs.map(x => x + shift));
       const keys = S.map((s, i) => (s.key ? i + 1 : 0)).filter(Boolean);
       const avc1 = box('avc1', new Uint8Array(6), u16(1), new Uint8Array(16), u16(o.width), u16(o.height), u32(0x480000), u32(0x480000), u32(0), u16(1),
         cat([u8(17), ascii('Big Street Studio'), new Uint8Array(14)]), u16(0x18), u16(0xffff), box('avcC', avcC), box('pasp', u32(1), u32(1)));
-      const stbl = box('stbl',
-        full('stsd', 0, 0, u32(1), avc1),
-        full('stts', 0, 0, u32(1), u32(n), u32(delta)),
-        needCtts ? full('ctts', 0, 0, u32(runs.length), ...runs.map(([c, v]) => cat([u32(c), u32(v)]))) : [],
-        keys.length < n ? full('stss', 0, 0, u32(keys.length), ...keys.map(u32)) : [],
-        full('stsc', 0, 0, u32(1), u32(1), u32(1), u32(1)),
-        full('stsz', 0, 0, u32(0), u32(n), ...S.map(s => u32(s.size))),
-        full('co64', 0, 0, u32(n), ...S.map(s => u64(s.off))));
+      const stbl = (entry, durs, smp, sync) => box('stbl', full('stsd', 0, 0, u32(1), entry), full('stts', 0, 0, u32(durs.length), ...durs.map(([c, d]) => cat([u32(c), u32(d)]))), ...sync,
+        full('stsc', 0, 0, u32(1), u32(1), u32(1), u32(1)), full('stsz', 0, 0, u32(0), u32(smp.length), ...smp.map(s => u32(s.size))), full('co64', 0, 0, u32(smp.length), ...smp.map(s => u64(s.off))));
+      const vstbl = stbl(avc1, [[n, delta]], S, [needCtts ? full('ctts', 0, 0, u32(R.length), ...R.map(([c, v]) => cat([u32(c), u32(v)]))) : [], keys.length < n ? full('stss', 0, 0, u32(keys.length), ...keys.map(u32)) : []]);
       const edts = needCtts ? box('edts', full('elst', 0, 0, u32(1), u32(durMs), u32(shift + offs[0]), u16(1), u16(0))) : [];
-      const trak = box('trak',
-        full('tkhd', 0, 3, u32(now), u32(now), u32(1), u32(0), u32(durMs), new Uint8Array(8), u16(0), u16(0), u16(0), u16(0), ...MATRIX, u32(o.width * 65536), u32(o.height * 65536)),
-        edts,
+      const tkhd = (id, dur, audio) => full('tkhd', 0, 3, u32(now), u32(now), u32(id), u32(0), u32(dur), new Uint8Array(8), u16(0), u16(audio ? 1 : 0), u16(audio ? 0x100 : 0), u16(0), ...MATRIX, u32(audio ? 0 : o.width * 65536), u32(audio ? 0 : o.height * 65536));
+      const traks = [box('trak', tkhd(1, durMs, false), edts,
         box('mdia', full('mdhd', 0, 0, u32(now), u32(now), u32(TS), u32(durTS), u16(0x55C4), u16(0)),
           full('hdlr', 0, 0, u32(0), ascii('vide'), new Uint8Array(12), ascii('Big Street Studio\0')),
-          box('minf', full('vmhd', 0, 1, u16(0), u16(0), u16(0), u16(0)), box('dinf', full('dref', 0, 0, u32(1), full('url ', 0, 1))), stbl)));
-      w.put(box('moov', full('mvhd', 0, 0, u32(now), u32(now), u32(1000), u32(durMs), u32(0x10000), u16(0x100), new Uint8Array(10), ...MATRIX, new Uint8Array(24), u32(2)), trak));
+          box('minf', full('vmhd', 0, 1, u16(0), u16(0), u16(0), u16(0)), box('dinf', full('dref', 0, 0, u32(1), full('url ', 0, 1))), vstbl)))];
+      let total = durMs;
+      if (A && AS.length) {
+        const ch = A.channels || 2, rate = A.rate || 48000, head = cat([new Uint8Array(6), u16(1), new Uint8Array(8), u16(ch), u16(16), u16(0), u16(0), u32(rate * 65536)]);
+        let entry;
+        if (A.codec === 'aac') entry = box('mp4a', head, full('esds', 0, 0, desc(3, u16(2), u8(0), desc(4, u8(0x40), u8(0x15), Uint8Array.of(0, 0, 0), u32(0), u32(A.bitrate || 160000), desc(5, A.config)), desc(6, u8(2)))));
+        else { const h = A.config, pre = h ? h[10] | (h[11] << 8) : 312; entry = box('Opus', head, box('dOps', u8(0), u8(ch), u16(pre), u32(rate), u16(0), u8(0))); }
+        const adur = AS.reduce((s, x) => s + x.dur, 0), aMs = Math.round(adur * 1000 / rate); total = Math.max(total, aMs);
+        traks.push(box('trak', tkhd(2, aMs, true), box('mdia', full('mdhd', 0, 0, u32(now), u32(now), u32(rate), u32(adur), u16(0x55C4), u16(0)),
+          full('hdlr', 0, 0, u32(0), ascii('soun'), new Uint8Array(12), ascii('Big Street Studio\0')),
+          box('minf', full('smhd', 0, 0, u16(0), u16(0)), box('dinf', full('dref', 0, 0, u32(1), full('url ', 0, 1))), stbl(entry, runs(AS.map(x => x.dur)), AS, [])))));
+      }
+      w.put(box('moov', full('mvhd', 0, 0, u32(now), u32(now), u32(1000), u32(total), u32(0x10000), u16(0x100), new Uint8Array(10), ...MATRIX, new Uint8Array(24), u32(traks.length + 1)), ...traks));
       return w.pos;
     },
   };
 }
 
 // ---------------------------------------------------------------- AVI (Motion JPEG)
-/** AVI 1.0 (lisible partout, 2 Go au plus) : une image JPEG par trame. o : { width, height, fps }. add(octets JPEG) */
+/**
+ * AVI 1.0 (lisible partout, 2 Go au plus) : une image JPEG par trame, et une piste son PCM 16 bits facultative.
+ * o : { width, height, fps, audio: { rate, channels } }. add(octets JPEG) ; addAudio(Int16Array entrelacé) — à donner image par image.
+ */
 export const AVI_MAX = 1.95e9;
 export function aviWriter(sink, o) {
-  const w = out(sink), us = Math.round(1e6 / o.fps);
-  const avih = (frames, maxBps, buf) => cat([ascii('avih'), le32(56), le32(us), le32(maxBps), le32(0), le32(0x10), le32(frames), le32(0), le32(1), le32(buf), le32(o.width), le32(o.height), new Uint8Array(16)]);
+  const w = out(sink), us = Math.round(1e6 / o.fps), A = o.audio || null, ch = A?.channels || 2, rate = A?.rate || 48000, ba = ch * 2;
+  const avih = (frames, maxBps, buf) => cat([ascii('avih'), le32(56), le32(us), le32(maxBps), le32(0), le32(0x10), le32(frames), le32(0), le32(A ? 2 : 1), le32(buf), le32(o.width), le32(o.height), new Uint8Array(16)]);
   const strh = (frames, buf) => cat([ascii('strh'), le32(56), ascii('vids'), ascii('MJPG'), le32(0), le16(0), le16(0), le32(0), le32(1), le32(o.fps), le32(0), le32(frames), le32(buf), le32(0xffffffff), le32(0), le16(0), le16(0), le16(o.width), le16(o.height)]);
   const strf = cat([ascii('strf'), le32(40), le32(40), le32(o.width), le32(o.height), le16(1), le16(24), ascii('MJPG'), le32(o.width * o.height * 3), le32(0), le32(0), le32(0), le32(0)]);
   const strl = cat([ascii('LIST'), le32(4 + strh(0, 0).length + strf.length), ascii('strl'), strh(0, 0), strf]);
-  const hdrlLen = 4 + avih(0, 0, 0).length + strl.length;
+  const astrh = blocks => cat([ascii('strh'), le32(56), ascii('auds'), le32(0), le32(0), le16(0), le16(0), le32(0), le32(ba), le32(rate * ba), le32(0), le32(blocks), le32(rate * ba), le32(0xffffffff), le32(ba), le16(0), le16(0), le16(0), le16(0)]);
+  const astrf = cat([ascii('strf'), le32(18), le16(1), le16(ch), le32(rate), le32(rate * ba), le16(ba), le16(16), le16(0)]);
+  const astrl = A ? cat([ascii('LIST'), le32(4 + 64 + astrf.length), ascii('strl'), astrh(0), astrf]) : new Uint8Array(0);
+  const hdrlLen = 4 + avih(0, 0, 0).length + strl.length + astrl.length;
   w.put(cat([ascii('RIFF'), le32(0), ascii('AVI '), ascii('LIST'), le32(hdrlLen), ascii('hdrl')]));
   const avihAt = w.pos; w.put(avih(0, 0, 0));
   const strhAt = w.pos + 12; w.put(strl);
+  const astrhAt = w.pos + 12; if (A) w.put(astrl);
   const moviAt = w.pos; w.put(cat([ascii('LIST'), le32(0), ascii('movi')]));
-  const idx = []; let maxSize = 0;
+  const idx = []; let maxSize = 0, frames = 0, blocks = 0;
+  const chunk = (id, b) => { if (w.pos + b.length + 16 * (idx.length + 2) > AVI_MAX) throw new Error('AVI limité à 2 Go : raccourcis la séquence, baisse la qualité, ou choisis MP4.'); idx.push([id, w.pos - (moviAt + 8), b.length]); maxSize = Math.max(maxSize, b.length); w.put(cat([ascii(id), le32(b.length), b, b.length & 1 ? new Uint8Array(1) : new Uint8Array(0)])); };
   return {
     get size() { return w.pos; },
-    add(jpeg) {
-      if (w.pos + jpeg.length + 16 * (idx.length + 2) > AVI_MAX) throw new Error('AVI limité à 2 Go : raccourcis la séquence, baisse la qualité, ou choisis MP4.');
-      idx.push([w.pos - (moviAt + 8), jpeg.length]); maxSize = Math.max(maxSize, jpeg.length);
-      w.put(cat([ascii('00dc'), le32(jpeg.length), jpeg, jpeg.length & 1 ? new Uint8Array(1) : new Uint8Array(0)]));
-    },
+    add(jpeg) { frames++; chunk('00dc', jpeg); },
+    addAudio(pcm) { if (!A || !pcm.length) return; blocks += pcm.length / ch; chunk('01wb', new Uint8Array(pcm.buffer, pcm.byteOffset, pcm.byteLength)); },
     finish() {
       const moviEnd = w.pos;
-      w.put(cat([ascii('idx1'), le32(idx.length * 16), ...idx.map(([off, len]) => cat([ascii('00dc'), le32(0x10), le32(off), le32(len)]))]));
-      const n = idx.length, buf = maxSize + 8;
+      w.put(cat([ascii('idx1'), le32(idx.length * 16), ...idx.map(([id, off, len]) => cat([ascii(id), le32(0x10), le32(off), le32(len)]))]));
+      const buf = maxSize + 8;
       w.at(4, le32(w.pos - 8)); w.at(moviAt + 4, le32(moviEnd - moviAt - 8));
-      w.at(avihAt, avih(n, Math.round(maxSize * o.fps), buf)); w.at(strhAt, strh(n, buf));
+      w.at(avihAt, avih(frames, Math.round(maxSize * o.fps), buf)); w.at(strhAt, strh(frames, buf));
+      if (A) w.at(astrhAt, astrh(blocks));
       return w.pos;
     },
   };

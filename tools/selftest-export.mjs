@@ -83,18 +83,30 @@ export async function checkExportNode(ok, root) {
     if (jpgs) {
       const af = path.join(tmp, 'a.avi'), s2 = sinkTo(af), a = E.aviWriter(s2, { width: 96, height: 54, fps: 10 }); for (const b of jpgs) a.add(new Uint8Array(b)); a.finish(); s2.close();
       ok('export AVI (Motion JPEG) lisible par ffprobe', probeOk(ffprobe(af), 'mjpeg', 96, 54, 5));
+      const X = await import(studioModule(root, 'export.js')), sine = new Float32Array(48000).map((_, i) => Math.sin(i / 48000 * 2 * Math.PI * 440) * 0.5), pcm = X.mapAudio({ rate: 48000, data: [sine, sine] }, 0, i => i * 100, 10, 24000);
+      const af2 = path.join(tmp, 'b.avi'), s3 = sinkTo(af2), a2 = E.aviWriter(s3, { width: 96, height: 54, fps: 10, audio: { rate: 48000, channels: 2 } });
+      jpgs.forEach((b, i) => { a2.add(new Uint8Array(b)); a2.addAudio(X.pcm16(pcm, i * 4800, (i + 1) * 4800)); }); a2.finish(); s3.close();
+      let au = null; try { au = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,sample_rate,channels:stream=duration', '-of', 'json', af2]).toString()).streams.find(x => x.codec_type === 'audio'); } catch { /* ffprobe absent */ }
+      ok('export AVI : piste son PCM (48 kHz, stéréo)', au && au.codec_name === 'pcm_s16le' && +au.sample_rate === 48000 && au.channels === 2, JSON.stringify(au));
     }
     ok('export : niveau H.264 selon la taille et la cadence', E.avcCodec(1920, 1080, 30) === 'avc1.640028' && E.avcCodec(3840, 2160, 60) === 'avc1.640034' && E.avcCodec(1280, 720, 30) === 'avc1.64001f');
+    // (carte du temps : ralenti ×0,5 → son rééchantillonné ; image figée → silence)
+    const X = await import(studioModule(root, 'export.js')), src = new Float32Array(48000).map((_, i) => i / 48000);
+    const slow = X.mapAudio({ rate: 48000, data: [src, src] }, 0, i => i * 50, 10, 48000), hold = X.mapAudio({ rate: 48000, data: [src, src] }, 0, i => (i < 5 ? 0 : (i - 5) * 100), 10, 48000);
+    ok('export : son suivi le long de la carte du temps (ralenti rééchantillonné, image figée muette)', Math.abs(slow[0][24000] - 0.25) < 0.01 && Math.abs(slow[0][47999] - 0.5) < 0.01 && hold[0][12000] === 0 && Math.abs(hold[0][36000] - 0.25) < 0.01);
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 }
 
 /** WebM et MP4 : encodés par WebCodecs dans une fenêtre du Studio (contexte sûr), écrits par encoders.js, relus par ffprobe */
 export async function checkExportRuntime(ok, w) {
   const r = await w.webContents.executeJavaScript(`(async () => {
-    const E = await import('/__studio/encoders.js'), out = {};
+    const E = await import('/__studio/encoders.js'), X = await import('/__studio/export.js'), out = {};
+    const sine = new Float32Array(48000).map((_, i) => Math.sin(i / 48000 * 2 * Math.PI * 440) * 0.4), pcm = X.mapAudio({ rate: 48000, data: [sine, sine] }, 0, i => i * 100, 10, 38400);
     for (const [fmt, codec] of [['webm', 'vp09.00.10.08'], ['mp4', E.avcCodec(160, 96, 10)]]) {
       const parts = []; let size = 0; const sink = { write(pos, b) { parts.push([pos, b.slice()]); size = Math.max(size, pos + b.length); } };
-      const wr = fmt === 'webm' ? E.webmWriter(sink, { codec: 'V_VP9', width: 160, height: 96, fps: 10 }) : E.mp4Writer(sink, { width: 160, height: 96, fps: 10 });
+      const au = await X.encodeAudio(pcm, fmt === 'webm' ? ['opus'] : ['aac', 'opus']); out[fmt + 'Audio'] = au?.codec || null;
+      const wr = fmt === 'webm' ? E.webmWriter(sink, { codec: 'V_VP9', width: 160, height: 96, fps: 10, audio: au ? { channels: 2, rate: 48000, priv: au.config } : null }) : E.mp4Writer(sink, { width: 160, height: 96, fps: 10, audio: au ? { codec: au.codec, rate: 48000, channels: 2, config: au.config } : null });
+      if (au) for (const [b, ts, n] of au.packets) wr.addAudio(b, fmt === 'webm' ? ts : n);
       let err = null; const enc = new VideoEncoder({ output: (c, m) => { const b = new Uint8Array(c.byteLength); c.copyTo(b); wr.add(b, c.timestamp, c.type === 'key', m?.decoderConfig?.description); }, error: e => { err = String(e); } });
       enc.configure({ codec, width: 160, height: 96, bitrate: 5e5, framerate: 10, ...(fmt === 'mp4' ? { avc: { format: 'avc' } } : {}) });
       for (let i = 0; i < 8; i++) { const px = new Uint8ClampedArray(160 * 96 * 4).map((_, k) => (k % 4 === 3 ? 255 : (k * 7 + i * 40) % 256)); const vf = new VideoFrame(px, { format: 'RGBX', codedWidth: 160, codedHeight: 96, timestamp: i * 100000 }); enc.encode(vf, { keyFrame: i === 0 }); vf.close(); }
@@ -109,6 +121,9 @@ export async function checkExportRuntime(ok, w) {
       const f = path.join(tmp, 'a.' + fmt); writeFileSync(f, Buffer.from(r[fmt].b64, 'base64'));
       const p = ffprobe(f);
       ok(`export ${fmt.toUpperCase()} (WebCodecs + conteneur du Studio)${p === null ? ' — ffprobe absent' : ' lisible par ffprobe'}`, !r[fmt].err && existsSync(f) && probeOk(p, codec, 160, 96, 8), r[fmt].err || (p?.startsWith('ERREUR') ? p : ''));
+      let a = null; try { a = JSON.parse(execFileSync('ffprobe', ['-v', 'error', '-show_entries', 'stream=codec_type,codec_name,channels,duration:format=duration', '-of', 'json', f]).toString()); } catch { /* ffprobe absent */ }
+      const as = a?.streams?.find(x => x.codec_type === 'audio');
+      ok(`export ${fmt.toUpperCase()} : piste son (${r[fmt + 'Audio'] || 'aucun encodeur'})`, !a || (as && as.channels === 2 && ['opus', 'aac'].includes(as.codec_name) && Math.abs(+a.format.duration - 0.8) < 0.15), JSON.stringify(as || a?.format || null));
     }
   } finally { rmSync(tmp, { recursive: true, force: true }); }
 }

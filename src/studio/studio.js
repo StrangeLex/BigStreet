@@ -47,7 +47,7 @@ let ents = cleanEnts(null);   // (apparences changées et entités masquées : e
 // (modules qui ajoutent leurs données au projet, sous leur clé — « monde » : world.js — : { save() → valeur | undefined, load(valeur | null),
 // has(), keyTimes(), clampTimes(durée), renderTrack(wrap, durée) } — enregistrés, rechargés, annulés (Ctrl+Z, IA) avec le reste)
 const extras = new Map();
-let monde = null, xp = null, frameHold = false;   // (xp : la page « Exporter » — export.js ; frameHold : l'export dessine lui-même chaque image)
+let monde = null, xp = null, frameHold = false, forceShot = null;   // (xp : la page « Exporter » — export.js ; frameHold : l'export dessine lui-même chaque image)
 let anim = null;   // (éléments animés façon Mine-Imator : objets, PNJ ajoutés, lumières, miroirs, poses — anim.js, clé « anim » du projet)
 const extrasSave = () => { const o = {}; for (const [k, x] of extras) { const v = x.save(); if (v !== undefined) o[k] = v; } return o; };
 const extrasLoad = o => { for (const [k, x] of extras) { try { x.load(o?.[k] ?? null); } catch (e) { console.warn('projet :', k, e); } } };
@@ -638,9 +638,11 @@ const xpHost = {
   overlay: (g, w, h, t) => anim?.paint(g, w, h, t),   // (fondus et titres peints sur chaque image exportée : anim.js)
   times: (a, b, step) => anim?.frameTimes(a, b, step) || null,   // (instants des images quand le temps est ralenti ou figé)
   audio: (a, b) => anim?.encodeAudio(a, b),   // (le son de la frise, encodé en Opus — export WebM)
+  mix: (a, b) => anim?.mixAudio?.(a, b) || null,   // (le son de la frise, mixé : export.js le suit le long de la carte du temps et l'encode pour WebM, MP4, AVI)
+  shotAt: t => activeCam(cams, t)?.id || null,   // (le plan à l'antenne : pour les fondus enchaînés de l'export)
   begin() { setPlaying(false); if (modal) modalEnd(false); if (document.pointerLockElement) document.exitPointerLock(); exporting = { frames: true }; frameHold = true; setMode('cine'); $('#recDot').hidden = false; },
   /** Une image de la cinématique à l'instant t, calculée tout de suite (jump : saut dans le temps) */
-  frame(t, jump = false) { T = clamp(t, 0, rec.dur); if (jump) seekNext = true; if (mode !== 'cine') setMode('cine'); draw(); },
+  frame(t, jump = false, camId = null) { T = clamp(t, 0, rec.dur); if (jump) seekNext = true; if (mode !== 'cine') setMode('cine'); forceShot = camId; try { draw(); } finally { forceShot = null; } },
   end() { frameHold = false; exporting = null; $('#recDot').hidden = true; setMode('free'); renderTracks(); },
 };
 
@@ -695,7 +697,7 @@ function draw() {
   moveCamera(dt);
   // La vue : libre, à travers une caméra (avec son filtre), ou celle de la cinématique (les caméras actives s'enchaînent)
   let shot = null;
-  if (mode === 'cine') shot = activeCam(cams, T); else if (mode === 'cam') shot = selCam(); else if (mode === 'pov') povApply();
+  if (mode === 'cine') shot = (forceShot && cams.find(c => c.id === forceShot)) || activeCam(cams, T); else if (mode === 'cam') shot = selCam(); else if (mode === 'pov') povApply();   // (forceShot : un plan imposé — fondu enchaîné de l'export)
   const w = shot && wpose(shot);
   if (mode !== 'pov') { const pv = w?.pov ? shot : mode === 'free' && selCam()?.pov ? selCam() : null; povCam(pv ? pv.parent.id : null); }   // (caméra subjective à l'image ou dans l'aperçu : la tête de son personnage est masquée)
   if (w) for (const c of CH) cam[c] = w[c]; else if (mode === 'cam') setMode('free');

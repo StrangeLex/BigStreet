@@ -32,7 +32,53 @@ export function cleanOptions(o, dur) {
   const quality = QUALITY.some(q => q[0] === o?.quality) ? o.quality : 'haute';
   const start = clamp(Math.round(+o?.start || 0), 0, dur), end = clamp(Math.round(Number.isFinite(+o?.end) ? +o.end : dur), 0, dur);
   return { format, res, width, height, fps, quality, bitrate: Number.isFinite(+o?.bitrate) && +o.bitrate > 0 ? clamp(Math.round(+o.bitrate), 2e5, 2e8) : null,
-    colors: [256, 128, 64, 32].includes(+o?.colors) ? +o.colors : 256, dither: o?.dither !== false, bars: !!o?.bars, start: Math.min(start, end), end: Math.max(start, end), name: String(o?.name || ''), reveal: o?.reveal !== false };
+    colors: [256, 128, 64, 32].includes(+o?.colors) ? +o.colors : 256, dither: o?.dither !== false, bars: !!o?.bars, start: Math.min(start, end), end: Math.max(start, end), name: String(o?.name || ''), reveal: o?.reveal !== false,
+    xfade: XFADES.includes(+o?.xfade) ? +o.xfade : 0 };
+}
+export const XFADES = [0, 250, 500, 1000, 2000];   // (fondu enchaîné entre deux plans, en ms de vidéo)
+export const AR = 48000;   // (fréquence du son exporté)
+/**
+ * Le son de la vidéo : pour chaque échantillon, l'instant du record de son image (interpolé entre deux images) — ralenti et accéléré
+ * sont ainsi rééchantillonnés, une image figée est muette. mix : { rate, data: [gauche, droite] } depuis start ; frameT(i) → ms du record.
+ * Rend [gauche, droite] (Float32Array de nOut échantillons à AR).
+ */
+export function mapAudio(mix, start, frameT, fps, nOut) {
+  const L = new Float32Array(nOut), R = new Float32Array(nOut), [a, b] = mix.data, len = a.length, k = mix.rate / 1000;
+  for (let s = 0; s < nOut; s++) {
+    const f = s / AR * fps, i = Math.floor(f), Ta = frameT(i), Tb = frameT(i + 1);
+    if (Tb - Ta < 0.01) continue;   // (image figée)
+    const x = (Ta + (Tb - Ta) * (f - i) - start) * k, j = Math.floor(x), u = x - j;
+    if (j < 0 || j + 1 >= len) continue;
+    L[s] = a[j] + (a[j + 1] - a[j]) * u; R[s] = b[j] + (b[j + 1] - b[j]) * u;
+  }
+  return [L, R];
+}
+/** Une tranche du son en PCM 16 bits entrelacé (AVI) */
+export function pcm16(pcm, s0, s1) {
+  const [L, R] = pcm, n = Math.max(0, Math.min(s1, L.length) - s0), out = new Int16Array(n * 2);
+  for (let i = 0; i < n; i++) { out[i * 2] = Math.max(-1, Math.min(1, L[s0 + i])) * 32767; out[i * 2 + 1] = Math.max(-1, Math.min(1, R[s0 + i])) * 32767; }
+  return out;
+}
+/** En-tête « OpusHead » (2 voies, 48 kHz) quand l'encodeur n'en donne pas */
+const opusHead = () => Uint8Array.of(79, 112, 117, 115, 72, 101, 97, 100, 1, 2, 56, 1, 128, 187, 0, 0, 0, 0, 0);
+/** Encode le son (WebCodecs) : le premier codec disponible parmi kinds ('aac', 'opus') → { codec, config, packets: [[octets, µs, échantillons]] } ou null */
+export async function encodeAudio(pcm, kinds) {
+  if (typeof AudioEncoder !== 'function') return null;
+  for (const kind of kinds) {
+    const cfg = { codec: kind === 'aac' ? 'mp4a.40.2' : 'opus', sampleRate: AR, numberOfChannels: 2, bitrate: 160000, ...(kind === 'aac' ? { aac: { format: 'aac' } } : {}) };
+    try { if (!(await AudioEncoder.isConfigSupported(cfg)).supported) continue; } catch { continue; }
+    const packets = []; let config = null, err = null;
+    const enc = new AudioEncoder({ output: (c, meta) => { const b = new Uint8Array(c.byteLength); c.copyTo(b); packets.push([b, c.timestamp, Math.round((c.duration || 0) * AR / 1e6) || (kind === 'aac' ? 1024 : 960)]); const d = meta?.decoderConfig?.description; if (d && !config) config = new Uint8Array(d instanceof ArrayBuffer ? d : d.buffer.slice(d.byteOffset, d.byteOffset + d.byteLength)); }, error: e => { err = e; } });
+    enc.configure(cfg);
+    const [L, R] = pcm, n = L.length, step = 4800;
+    for (let i = 0; i < n && !err; i += step) { const len = Math.min(step, n - i), buf = new Float32Array(len * 2); buf.set(L.subarray(i, i + len), 0); buf.set(R.subarray(i, i + len), len);
+      const ad = new AudioData({ format: 'f32-planar', sampleRate: AR, numberOfFrames: len, numberOfChannels: 2, timestamp: Math.round(i / AR * 1e6), data: buf }); enc.encode(ad); ad.close(); }
+    await enc.flush(); enc.close();
+    if (err || !packets.length) continue;
+    if (kind === 'aac' && !config) config = Uint8Array.of(0x11, 0x90);   // (AAC-LC, 48 kHz, stéréo)
+    return { codec: kind, config: config || opusHead(), packets };
+  }
+  return null;
 }
 export const frameCount = o => Math.max(1, Math.round((o.end - o.start) / 1000 / (o.rate || 1) * o.fps));
 
@@ -101,16 +147,27 @@ export function createExport(host) {
     cv.addEventListener('webglcontextlost', lost);
     // (la toile de copie est en mémoire vive — willReadFrequently — : les images partent à l'encodeur sans relecture du processeur graphique)
     const oc = new OffscreenCanvas(o.width, o.height), g = oc.getContext('2d', { willReadFrequently: true });
-    let enc = null, writer = null, pending = 0;
+    let enc = null, writer = null, pending = 0, audioDone = null;
+    // (le son : mixé sur la durée du record couverte, puis pris image par image à l'instant du record de chaque image — ralenti et
+    // accéléré rééchantillonnés, image figée muette —, sur toute la durée de la vidéo ; pas de son dans un GIF)
+    const frameT = i => (TL ? TL[Math.min(i, TL.length - 1)] + (i >= TL.length ? (i - TL.length + 1) * step : 0) : o.start + i * step);
+    let pcm = null;
+    if (o.format !== 'gif' && host.mix) { try { const end = Math.max(o.end, frameT(n - 1) + step), mix = await host.mix(o.start, end); if (mix) pcm = mapAudio(mix, o.start, frameT, o.fps, Math.round(n / o.fps * AR)); } catch (e) { console.warn('export : mixage', e); } }
+    // (fondu enchaîné : autour de chaque changement de plan, les deux plans sont calculés et mélangés sur o.xfade ms de vidéo)
+    const shots = host.shotAt ? Array.from({ length: n }, (_, i) => host.shotAt(frameT(i))) : null, half = Math.round(o.xfade / 1000 * o.fps / 2), cuts = [];
+    if (shots && half > 0) for (let i = 1; i < n; i++) if (shots[i] && shots[i - 1] && shots[i] !== shots[i - 1]) cuts.push([i, shots[i - 1], shots[i]]);
     try {
       if (vc) {
-        // (piste son — musiques et sons posés sur la frise : anim.js — : WebM seulement, à vitesse normale ; déjà encodée en Opus)
-        let au = null; if (o.format === 'webm' && o.rate === 1) { try { au = await host.audio?.(o.start, o.end) || null; } catch (e) { console.warn('export : son', e); } }
-        writer = o.format === 'webm' ? webmWriter(sink, { codec: vc.kind, width: o.width, height: o.height, fps: o.fps, audio: au ? { channels: 2, rate: 48000, priv: au.head } : null }) : mp4Writer(sink, { width: o.width, height: o.height, fps: o.fps });
+        // (piste son — musiques et sons de la frise, anim.js — : mixée, suivie le long de la carte du temps, encodée AVANT les images)
+        const au = pcm ? await encodeAudio(pcm, o.format === 'webm' ? ['opus'] : ['aac', 'opus']).catch(e => { console.warn('export : son', e); return null; }) : null;
+        writer = o.format === 'webm' ? webmWriter(sink, { codec: vc.kind, width: o.width, height: o.height, fps: o.fps, audio: au ? { channels: 2, rate: AR, priv: au.config } : null })
+          : mp4Writer(sink, { width: o.width, height: o.height, fps: o.fps, audio: au ? { codec: au.codec, rate: AR, channels: 2, config: au.config } : null });
         enc = new VideoEncoder({ output: (chunk, meta) => { const b = new Uint8Array(chunk.byteLength); chunk.copyTo(b); try { writer.add(b, chunk.timestamp, chunk.type === 'key', meta?.decoderConfig?.description); } catch (e) { J.err = e; } }, error: e => { J.err = e; } });
         enc.configure(vc.cfg);
-        if (au) for (const [b, ts] of au.packets) writer.addAudio(b, ts);
-      } else writer = o.format === 'avi' ? aviWriter(sink, { width: o.width, height: o.height, fps: o.fps }) : gifWriter(sink, { width: o.width, height: o.height, fps: o.fps, colors: o.colors, dither: o.dither });
+        if (au) for (const [b, ts, smp] of au.packets) { if (o.format === 'webm') writer.addAudio(b, ts); else writer.addAudio(b, smp); }
+        if (au) audioDone = au.codec;
+      } else writer = o.format === 'avi' ? aviWriter(sink, { width: o.width, height: o.height, fps: o.fps, audio: pcm ? { rate: AR, channels: 2 } : null }) : gifWriter(sink, { width: o.width, height: o.height, fps: o.fps, colors: o.colors, dither: o.dither });
+      if (pcm && o.format === 'avi') audioDone = 'pcm';
       host.begin();
       // (avant la première image : la scène de l'instant de début est construite — quartiers de la ville, personnages, objets)
       host.frame(o.start, true);
@@ -123,10 +180,13 @@ export function createExport(host) {
       for (let i = 0; i < n && !J.cancel && !J.err; i++) {
         const T = TL ? TL[i] : Math.min(o.end, o.start + i * step);
         if (i) advance(step);
-        host.frame(T, false);
+        const X = cuts.find(([c]) => i >= c - half && i < c + half);
         // (l'image, telle que le moteur vient de la dessiner — copiée tout de suite, avant que le navigateur ne l'efface)
         g.fillStyle = '#05070c'; g.fillRect(0, 0, o.width, o.height);
-        g.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, o.width, o.height);
+        if (X) {   // (fondu enchaîné : le plan qui finit, puis celui qui commence par-dessus, de plus en plus opaque)
+          host.frame(T, false, X[1]); g.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, o.width, o.height);
+          host.frame(T, false, X[2]); g.globalAlpha = clamp((i - (X[0] - half) + 0.5) / (2 * half), 0, 1); g.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, o.width, o.height); g.globalAlpha = 1;
+        } else { host.frame(T, false); g.drawImage(cv, 0, 0, cv.width, cv.height, 0, 0, o.width, o.height); }
         try { host.overlay?.(g, o.width, o.height, T); } catch (e) { console.warn('export : calque 2D', e); }   // (fondus, titres et sous-titres : anim.js)
         if (o.bars) { const h = Math.round(o.height * 0.11); g.fillStyle = '#000'; g.fillRect(0, 0, o.width, h); g.fillRect(0, o.height - h, o.width, h); }
         if (enc) {
@@ -137,6 +197,7 @@ export function createExport(host) {
         } else if (o.format === 'avi') {
           const b = new Uint8Array(await (await oc.convertToBlob({ type: 'image/jpeg', quality: jpegQuality(o.quality) })).arrayBuffer());
           writer.add(b);
+          if (pcm) writer.addAudio(pcm16(pcm, Math.round(i * AR / o.fps), Math.round((i + 1) * AR / o.fps)));
         } else writer.add(g.getImageData(0, 0, o.width, o.height).data);
         const spent = Date.now() - t0, eta = i ? spent / (i + 1) * (n - i - 1) : null;
         if (i % 2 === 0 || i === n - 1) on({ type: 'progress', i: i + 1, n, eta, size: written, T, img: oc });
@@ -149,7 +210,7 @@ export function createExport(host) {
       writer.finish();
       const r = await api.xport.finish(false, o.reveal !== false);
       if (!r?.ok) throw new Error(r?.error || 'écriture du fichier impossible');
-      return { ok: true, name: r.name, dir: r.dir, size: r.size, frames: pending, secs: (Date.now() - t0) / 1000, width: o.width, height: o.height, fps: o.fps, format: o.format, codec: vc?.cfg.codec || (o.format === 'avi' ? 'mjpeg' : 'gif') };
+      return { ok: true, name: r.name, dir: r.dir, size: r.size, frames: pending, secs: (Date.now() - t0) / 1000, width: o.width, height: o.height, fps: o.fps, format: o.format, codec: vc?.cfg.codec || (o.format === 'avi' ? 'mjpeg' : 'gif'), audio: audioDone, xfades: cuts.length };
     } catch (e) {
       console.error(e); try { await api.xport.finish(true); } catch { /* déjà fermé */ }
       return { ok: false, error: String(e?.message || e) };
@@ -227,7 +288,8 @@ export function createExport(host) {
           el('fieldset', {}, el('legend', { text: 'Format' }), el('div', { class: 'seg', id: 'xpFormat' }), el('p', { class: 'note', id: 'xpFmtNote' })),
           el('fieldset', {}, el('legend', { text: 'Image' }),
             el('div', { class: 'seg', id: 'xpRes' }), el('div', { class: 'seg', id: 'xpFps' }),
-            el('label', { class: 'row' }, el('input', { type: 'checkbox', id: 'xpBars' }), 'Bandes de cinéma (noires, en haut et en bas)')),
+            el('label', { class: 'row' }, el('input', { type: 'checkbox', id: 'xpBars' }), 'Bandes de cinéma (noires, en haut et en bas)'),
+            el('div', { class: 'row' }, el('span', { class: 'note', text: 'Fondu enchaîné entre les plans' }), el('div', { class: 'seg', id: 'xpXfade' }))),
           el('fieldset', {}, el('legend', { text: 'Compression' }),
             el('div', { class: 'seg', id: 'xpQual' }),
             el('div', { class: 'row', id: 'xpBrRow' }, el('span', { class: 'note', text: 'Débit' }), el('input', { type: 'number', id: 'xpBr', min: '0.2', max: '200', step: '0.5', title: 'Débit en mégabits par seconde (vide : celui de la qualité choisie)' }), el('span', { class: 'note', text: 'Mb/s' })),
@@ -265,6 +327,7 @@ export function createExport(host) {
       seg('xpRes', Fm.res.map(r => [r, r === '4k' ? '4K' : r, RESOLUTIONS[r].join(' × ')]), o.res, v => { opts.res = v; keep(); render(); });
       seg('xpFps', Fm.fps.map(f => [f, `${f} i/s`]), o.fps, v => { opts.fps = v; keep(); render(); });
       seg('xpQual', QUALITY.map(([k, n]) => [k, n]), o.quality, v => { opts.quality = v; opts.bitrate = null; F('xpBr').value = ''; keep(); render(); });
+      seg('xpXfade', XFADES.map(v => [v, v ? `${String(v / 1000).replace('.', ',')} s` : 'non', v ? 'Les deux plans se mélangent pendant cette durée autour de chaque coupe' : 'Coupe franche']), o.xfade, v => { opts.xfade = v; keep(); render(); });
       seg('xpColors', [256, 128, 64].map(c => [c, String(c)]), o.colors, v => { opts.colors = v; keep(); render(); });
       F('xpExt').textContent = '.' + o.format; F('xpFmtNote').textContent = Fm.note;
       F('xpBars').checked = o.bars; F('xpDither').checked = o.dither;

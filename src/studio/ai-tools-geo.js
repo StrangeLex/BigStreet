@@ -40,7 +40,8 @@ export function createGeoKit(S) {
     if (out) { const rec = S.rec(), pb = S.pb(), K = rec?.users.get(pb?.me); let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity; const add = (x, z) => { if (x < x0) x0 = x; if (x > x1) x1 = x; if (z < z0) z0 = z; if (z > z1) z1 = z; };
       if (K) for (let i = 0; i < K.x.length; i++) add(K.x[i], K.z[i]); const c = S.cam?.(); if (c) add(c.x, c.z); for (const p of S.points?.() || []) add(p.x, p.z);
       if (x1 >= x0) box = { x0: x0 - 90, x1: x1 + 90, z0: z0 - 90, z1: z1 + 90 }; }
-    const R = extractTriangles([w.roomGroup, w.itemGroup], { keep: o => !!fog?.has(o), skip: o => o.isSprite || o.isPoints || o.isLine || o.userData?.studioSkip, box, max: out ? 1200000 : 2500000 });
+    // (stNode, stBase : éléments ajoutés ou animés par le projet — ils bougent, ce ne sont pas des murs)
+    const R = extractTriangles([w.roomGroup, w.itemGroup], { keep: o => !!fog?.has(o), skip: o => o.isSprite || o.isPoints || o.isLine || o.userData?.studioSkip || o.userData?.stNode !== undefined || !!o.userData?.stBase, box, max: out ? 1200000 : 2500000 });
     const soup = createSoup(R.tris, R.flags, 2, box), ox = w.ox || 0, oy = w.oy || 0, rows = w.grid || [], Hh = rows.length, Ww = Math.max(0, ...rows.map(r => r.length)), lv = !!w.levelShift;
     G = createGeo(soup, { outdoor: out,
       inMap: (x, z) => x >= ox - 1 && x <= ox + Ww && z >= oy - 1 && z <= oy + Hh,

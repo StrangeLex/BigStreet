@@ -122,7 +122,8 @@ export const TOOLS = [
   T('set_playback', 'Lecture : en marche ou en pause, et vitesse (0,1 à 4 ; 1 = normale — elle vaut aussi pour la cinématique et l’export : 0,5 = ralenti).', P({ playing: B('Lecture en marche.'), rate: N('Vitesse.') }), true),
   T('set_view', 'Ce que montre la vue : "libre" (caméra libre), "camera" (à travers une caméra), "joueur" (par les yeux du joueur).', P({ mode: S('Vue.', { enum: ['libre', 'camera', 'joueur'] }), camera: CAM }, ['mode'])),
   T('appearance_options', 'Ce qu’on peut faire porter à un personnage : pour chaque attribut (gender, skin, hair, hairStyle, eyes, beard, chest, hat, glasses, top, bottom, feet et leurs couleurs acc, glassesCol, shirt, pants, shoes) la liste « numéro: nom » permise au compte, les skins de vêtements possédés qui vont sur sa tenue, les objets tenables et les sacs.', P({ entity: ENT, attribute: S('Un seul attribut à détailler (sinon tous, en abrégé).') }, ['entity'])),
-  T('set_appearance', 'Change l’apparence d’un personnage du record. look : { attribut: numéro } (voir appearance_options) ; skins : { hat | glasses | top | bottom | feet : "clé du skin" ou null } ; hold : objet en main ("glock17", "couteau__lave"… ou null) ; bag : "sac_a_dos", "sacoche", "sac_a_dos__pirate", "sacoche:3" (teinte) ou null. Ce que le compte ne possède pas est refusé.', P({ entity: ENT, look: { type: 'object', description: 'Attributs à changer.', additionalProperties: { type: 'number' } }, skins: { type: 'object', description: 'Skins de vêtements.', additionalProperties: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, hold: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Objet tenu.' }, bag: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Sac.' } }, ['entity']), true),
+  T('set_appearance', 'Change l’apparence d’un personnage du record. look : { attribut: numéro } (voir appearance_options) ; skins : { hat | glasses | top | bottom | feet : "clé du skin" ou null } ; hold : objet en main ("glock17", "couteau__lave"… ou null) ; bag : "sac_a_dos", "sacoche", "sac_a_dos__pirate", "sacoche:3" (teinte) ou null. Ce que le compte ne possède pas est refusé.', P({ entity: ENT, look: { type: 'object', description: 'Attributs à changer : numéro, ou nom exact du modèle / de la couleur (list_skins).', additionalProperties: { anyOf: [{ type: 'number' }, { type: 'string' }] } }, skins: { type: 'object', description: 'Skins de vêtements.', additionalProperties: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, hold: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Objet tenu.' }, bag: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Sac.' } }, ['entity']), true),
+  T('list_skins', 'Ce qu’un personnage peut porter, par emplacement, avec les NOMS EXACTS, limité à ce que le compte possède (un administrateur a tout) : haut, bas, chaussures, chapeau, lunettes, coiffure, barbe, corps — pour chacun les modèles (« numéro: nom »), les couleurs, les skins (clé et nom) ; et les objets tenables, les sacs. À appeler avant set_appearance.', P({ entity: ENT, slot: S('Un seul emplacement : haut, bas, chaussures, chapeau, lunettes, coiffure, barbe, corps, en_main, sac.') })),
   T('reset_appearance', 'Rend à un personnage son apparence d’origine (celle du record).', P({ entity: ENT }, ['entity']), true),
   T('set_visibility', 'Masque ou montre une entité (personnage, véhicule, objet) dans la scène.', P({ entity: ENT, visible: B('Visible ou non.') }, ['entity', 'visible']), true),
   T('preview_cinematic', 'Lance la prévisualisation de la cinématique dans la vue (les caméras actives s’enchaînent).', P({})),
@@ -139,10 +140,15 @@ export const TOOL_GROUPS = {
   export: { label: 'exporter la cinématique en vidéo', when: /export|mp4|webm|gif|avi|video|fichier|rendu final/ },
   apparence: { label: 'tenues et apparence des personnages, masquer une entité', when: /tenue|habit|habill|vetement|apparence|skin|chapeau|coiff|cheveu|lunette|masqu|cache|invisible|disparai|sac|look|deguis|en main/ },
 };
+// Emplacements d'apparence : [attribut du modèle, nom français] ; COLOR_OF : l'attribut de couleur qui va avec ; SLOT_SYN : noms approchés
+const SLOTS = [['top', 'haut'], ['bottom', 'bas'], ['feet', 'chaussures'], ['hat', 'chapeau'], ['glasses', 'lunettes'], ['hairStyle', 'coiffure'], ['beard', 'barbe'], ['gender', 'corps'], ['chest', 'poitrine'], ['skin', 'peau'], ['eyes', 'yeux']];
+const COLOR_OF = { top: 'shirt', bottom: 'pants', feet: 'shoes', hat: 'acc', glasses: 'glassesCol', hairStyle: 'hair' };
+const SLOT_SYN = { haut: 'top', tshirt: 'top', pull: 'top', veste: 'top', chemise: 'top', torse: 'top', bas: 'bottom', pantalon: 'bottom', jupe: 'bottom', short: 'bottom', jambes: 'bottom', chaussures: 'feet', chaussure: 'feet', pieds: 'feet', shoes: 'shoes', chapeau: 'hat', casquette: 'hat', bonnet: 'hat', tete: 'hat', lunettes: 'glasses', masque: 'glasses', coiffure: 'hairStyle', cheveux: 'hairStyle', coupe: 'hairStyle', hairstyle: 'hairStyle', barbe: 'beard', corps: 'gender', genre: 'gender', sexe: 'gender', poitrine: 'chest', peau: 'skin', yeux: 'eyes', enmain: 'hold', main: 'hold', objet: 'hold', sac: 'bag', sacs: 'bag',
+  couleurhaut: 'shirt', couleurbas: 'pants', couleurchaussures: 'shoes', couleurcheveux: 'hair', couleurchapeau: 'acc' };
 const GROUP_OF = Object.fromEntries(Object.entries({
   animation: 'list_elements search_models add_object add_character add_particles animate_element make_fall update_element delete_element delete_element_keys list_poses set_pose play_emote',
   lumieres: 'add_light add_mirror list_scene_lights set_scene_lighting set_scene_light', titres: 'add_text add_title set_fade capture_image set_camera_shake',
-  monde: 'world_settings set_world set_world_keys', export: 'export_cinematic export_video', apparence: 'appearance_options set_appearance reset_appearance set_visibility',
+  monde: 'world_settings set_world set_world_keys', export: 'export_cinematic export_video', apparence: 'appearance_options list_skins set_appearance reset_appearance set_visibility',
 }).flatMap(([g, names]) => names.split(' ').map(n => [n, g])));
 export const toolSchemas = (list = TOOLS) => list.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
 
@@ -356,9 +362,35 @@ export function createEngine(H) {
     appearance_options(a) { const e = ent(a.entity); if (!e || (e.kind !== 'joueur' && e.kind !== 'pnj')) return ko(`« ${a.entity} » : ce n’est pas un personnage.`); const o = H.lookOptions(e.id, a.attribute || null); return o ? ok(`Options d’apparence de ${e.name}.`, o) : ko('Options d’apparence indisponibles.'); },
     set_appearance(a) {
       const e = ent(a.entity); if (!e || (e.kind !== 'joueur' && e.kind !== 'pnj')) return ko(`« ${a.entity} » : ce n’est pas un personnage.`);
-      const patch = {}; if (a.look && typeof a.look === 'object') patch.look = Object.fromEntries(Object.entries(a.look).map(([k, v]) => [k, Math.round(+v)])); if (a.skins && typeof a.skins === 'object') patch.skins = a.skins; if ('hold' in a) patch.hold = a.hold; if ('bag' in a) patch.bag = a.bag;
-      const r = H.setLook(e.id, patch);
-      return r.done.length ? ok(`Apparence de ${e.name} : ${r.done.join(', ')}${r.refused.length ? ` — refusé : ${r.refused.join(' ; ')}` : ''}.`, { fait: r.done, refuse: r.refused }) : ko(`Apparence de ${e.name} inchangée${r.refused.length ? ` : ${r.refused.join(' ; ')}` : ''}.`);
+      // (noms approchés acceptés : emplacement en français — « haut », « chapeau » —, modèle ou couleur par son nom — « Pull », « rouge » —,
+      // skin par son nom ; la meilleure correspondance est prise et annoncée ; rien de proche : refus qui renvoie à list_skins)
+      const O = H.lookOptions(e.id, null) || { attributs: {}, skins: {} }, notes = [], miss = [], patch = {}, detail = new Map();
+      const listOf = k => { if (!detail.has(k)) { const L = Array.isArray(O.attributs?.[k]) ? O.attributs[k] : H.lookOptions(e.id, k)?.attributs?.[k]; detail.set(k, (Array.isArray(L) ? L : []).map(s => { const m = /^(\d+): (.*)$/.exec(s); return m ? [+m[1], m[2]] : null; }).filter(Boolean)); } return detail.get(k); };
+      const best = (L, v) => { const n = nrm(v); if (!n) return null; const sc = ([, name]) => { const m = nrm(name); if (m === n) return 100; if (m.includes(n) || n.includes(m)) return 60 - Math.abs(m.length - n.length); const A0 = new Set(n.split(' ')), hit = m.split(' ').filter(w => w.length > 2 && [...A0].some(x => x.length > 2 && (x.startsWith(w.slice(0, 4)) || w.startsWith(x.slice(0, 4))))).length; return hit ? 20 + hit * 10 : 0; }; const S0 = L.map(x => [sc(x), x]).sort((x, y) => y[0] - x[0])[0]; return S0 && S0[0] > 0 ? S0[1] : null; };
+      const slotOf = k => { const n = nrm(k).replace(/ /g, ''); return SLOT_SYN[n] || k; };
+      if (a.look && typeof a.look === 'object') { patch.look = {};
+        for (const [k0, v] of Object.entries(a.look)) { const k = slotOf(k0); if (num(v) !== null) { patch.look[k] = Math.round(num(v)); continue; }
+          const hit = best(listOf(k), v) || (COLOR_OF[k] ? null : null); if (hit) { patch.look[k] = hit[0]; if (nrm(hit[1]) !== nrm(v)) notes.push(`${k} « ${v} » → ${hit[1]} (n° ${hit[0]})`); }
+          else { const c = COLOR_OF[k] && best(listOf(COLOR_OF[k]), v); if (c) { patch.look[COLOR_OF[k]] = c[0]; notes.push(`« ${v} » → couleur ${COLOR_OF[k]} ${c[1]} (n° ${c[0]})`); } else miss.push(`${k0} « ${v} » : rien de ce nom (list_skins donne les noms exacts)`); } } }
+      if (a.skins && typeof a.skins === 'object') { patch.skins = {};
+        for (const [k0, v] of Object.entries(a.skins)) { const k = slotOf(k0); if (v === null) { patch.skins[k] = null; continue; } const L = (O.skins?.[k] || []), n = nrm(v);
+          const s = L.find(x => x.cle === v) || L.find(x => nrm(x.cle) === n || nrm(x.nom) === n) || (h => (h ? L.find(x => x.cle === h[0]) : null))(best(L.map(x => [x.cle, x.nom]), v));
+          if (s) { patch.skins[k] = s.cle; if (s.cle !== v) notes.push(`skin ${k} « ${v} » → ${s.nom} (${s.cle})`); continue; }
+          const st = best(listOf(k), v);   // (ce n'est pas un skin : un modèle de vêtement de cet emplacement, peut-être)
+          if (st) { (patch.look ||= {})[k] = st[0]; notes.push(`« ${v} » n’est pas un skin : modèle ${k} ${st[1]} (n° ${st[0]})`); } else miss.push(`skin ${k0} « ${v} » : aucun skin ni modèle de ce nom dans ce que le compte possède (list_skins donne les noms exacts)`); } }
+      if ('hold' in a) patch.hold = a.hold; if ('bag' in a) patch.bag = a.bag;
+      const r = H.setLook(e.id, patch), refused = [...r.refused, ...miss], tail = `${notes.length ? ` — correspondances : ${notes.join(' ; ')}` : ''}${refused.length ? ` — refusé : ${refused.join(' ; ')}` : ''}`;
+      return r.done.length ? ok(`Apparence de ${e.name} : ${r.done.join(', ')}${tail}.`, { fait: r.done, refuse: refused, ...(notes.length ? { correspondances: notes } : {}) }) : ko(`Apparence de ${e.name} inchangée${refused.length ? ` : ${refused.join(' ; ')}` : ''}.`);
+    },
+    list_skins(a) {
+      const e = a.entity == null || a.entity === '' ? H.entities().find(x => x.me) : ent(a.entity); if (!e || (e.kind !== 'joueur' && e.kind !== 'pnj')) return ko(`« ${a.entity} » : ce n’est pas un personnage.`);
+      const O = H.lookOptions(e.id, null); if (!O) return ko('Options d’apparence indisponibles.');
+      const want = a.slot ? SLOT_SYN[nrm(a.slot).replace(/ /g, '')] || nrm(a.slot) : null, out = {};
+      for (const [k, label] of SLOTS) { if (want && want !== k) continue; const col = COLOR_OF[k], L = O.attributs?.[k];
+        out[label] = { attribut: k, modeles: Array.isArray(L) ? L : [], ...(col ? { couleur: { attribut: col, valeurs: want ? H.lookOptions(e.id, col)?.attributs?.[col] || [] : O.attributs?.[col] } } : {}), ...(O.skins?.[k]?.length ? { skins: O.skins[k].map(s => ({ cle: s.cle, nom: s.nom })) } : {}), porte: O.actuel?.[k] }; }
+      if (!want || want === 'hold') out.en_main = (O.objets_en_main || []).slice(0, 40); if (!want || want === 'bag') out.sacs = O.sacs || [];
+      if (want && !Object.keys(out).length) return ko(`list_skins : emplacement « ${a.slot} » inconnu (${SLOTS.map(s => s[1]).join(', ')}, en_main, sac).`);
+      return ok(`Ce que ${e.name} peut porter${want ? ` (${a.slot})` : ''}, dans la limite du compte.`, { personnage: e.name, ...out, usage: 'set_appearance : look { attribut: numéro ou nom du modèle / de la couleur }, skins { top | bottom | feet | hat | glasses : clé ou nom du skin }' });
     },
     reset_appearance(a) { const e = ent(a.entity); if (!e) return ko(`« ${a.entity} » : entité introuvable.`); H.resetLook(e.id); return ok(`${e.name} a retrouvé son apparence d’origine.`); },
     set_visibility(a) { const e = ent(a.entity); if (!e) return ko(`« ${a.entity} » : entité introuvable.`); H.setHidden(e.key, a.visible === false); return ok(`${e.name} ${a.visible === false ? 'masqué' : 'visible'}.`); },
