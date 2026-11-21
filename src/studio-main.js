@@ -257,8 +257,8 @@ module.exports = function setupStudio({ SITE, log, getGame, getLauncher, install
       const r = await site('studio/ai', { method: 'POST', body: { messages: body.messages, tools: Array.isArray(body.tools) ? body.tools : undefined }, timeout: 90000 });
       if (r.status === 403 && r.json?.vip === false) return { error: r.json.error || 'Fonctionnalité Studio VIP', vip: false };
       if (r.status === 404) return { error: 'L’assistant n’est pas encore disponible sur le site.' };
-      if (!r.json) return { error: `Le site n’a pas répondu (${r.status}).` };
-      return r.json;
+      if (!r.json) return { error: r.status === 429 ? 'Trop de requêtes.' : `Le site n’a pas répondu (${r.status}).`, status: r.status };
+      return r.status === 200 ? r.json : { ...r.json, error: r.json.error || `Erreur ${r.status}`, status: r.status };   // (status : la page réessaie d'elle-même sur un 429)
     } catch (err) { log.info('studio : assistant : ' + err); return { error: /timeout|aborted/i.test(String(err)) ? 'L’assistant met trop de temps à répondre : réessaie.' : 'Site injoignable : l’assistant a besoin d’Internet.' }; }
     finally { aiBusy = false; }
   });

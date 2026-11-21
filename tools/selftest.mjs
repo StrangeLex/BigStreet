@@ -207,7 +207,31 @@ async function checkAI(C, { E, L, rec }) {
   ok('assistant : point de restauration', st.cams.length === 0 && st.ents.hidden.length === 0);
   // modèle sans appel d'outils natif : actions en JSON dans le texte ; refus VIP ; modèle muet
   let m = 0; const alt = await A.runTurn(H, history, 'Un plan fixe.', async () => ({ message: { role: 'assistant', content: m++ ? 'Voilà un plan fixe.' : 'Je m’en occupe.\n{"actions":[{"outil":"create_camera","arguments":{"name":"Fixe","t":1,"x":5,"y":2,"z":5,"look_at":{"entity":"joueur"}}},{"outil":"set_keys","arguments":{"camera":"Fixe","keys":[{"t":5,"x":5}]}}],"message":"Je pose un plan fixe."}' } }));
-  ok('assistant : actions en JSON dans le texte (modèle sans outils)', alt.actions.length === 2 && alt.actions.every(a => a.ok) && st.cams.length === 1 && st.cams[0].name === 'Fixe' && st.cams[0].tracks.x.length === 2 && alt.text === 'Voilà un plan fixe.' && near2(C.poseAt(st.cams[0], 1000).yaw, Math.atan2(10 - 5, 11 - 5), 0.05));
+  ok('assistant : actions en JSON dans le texte (modèle sans outils)', alt.actions.length === 2 && alt.actions.every(a => a.ok) && st.cams.length === 1 && st.cams[0].name === 'Fixe' && st.cams[0].tracks.x.length === 2 && alt.text.startsWith('Voilà un plan fixe.') && alt.text.includes('Montage réel : 1 plan') && near2(C.poseAt(st.cams[0], 1000).yaw, Math.atan2(10 - 5, 11 - 5), 0.05));
+  // (les erreurs vues en vrai le 21/11 : liste vide pour un type approximatif, paramètre manquant, caméra réglée avant d'être créée,
+  // nom approché, plan de 0,4 s, résumé faux, site qui répond 429 — rejouées par un faux modèle)
+  st.cams = []; st.ents = { over: {}, hidden: [] };
+  const real = [
+    { content: '', tool_calls: [call('list_entities', { type: 'npc', t: 0 }, 'l1'), call('list_entities', { search: 'zzz', t: 0 }, 'l2'), call('list_entities', { near: 'joueur', radius: 1, t: 0 }, 'l3'), call('list_entities', { type: 'Personnage' }, 'l4')] },
+    { content: '', tool_calls: [call('frame_shot', { camera: 'Ouverture', subject: 'joueur', t: 0 }, 'f1'), call('frame_shot', { camera: 'ouverture', t: 3, shot: 'Plan large', side: 'derrière', height: 'drone' }, 'f2'),
+      call('update_camera', { camera: 'Orbit_Lex_chute', filter: 'cine', raytracing: 50 }, 'u1'), call('set_keys', { camera: 'Orbit_Lex_chute', keys: [{ t: 4, fov: 40 }] }, 'k1'), call('orbit_shot', { camera: 'Orbit Lex-chute', subject: 'joueur', from: 3, to: 6 }, 'o1'),
+      call('frame_shot', { camera: 'Insert', subject: 'Nina', shot: 'gros plan', t: 6 }, 'f3'), call('frame_shot', { camera: 'Insert', subject: 'Nina', shot: 'gros_plan', t: 6.4 }, 'f4'),
+      call('set_keys', { camera: 'Finale', keys: [{ t: 6.4, x: 12, y: 3, z: 4, look_at: { entity: 'joueur' } }, { t: 10, x: 14, y: 3, z: 4, look_at: { entity: 'joueur' } }] }, 'k2'), call('frame_shot', { t: 1 }, 'f5')] },
+    { content: 'Voilà : 5 plans magnifiques.' },
+    { content: '', tool_calls: [call('delete_camera', { camera: 'INSERT' }, 'd1'), call('set_keys', { camera: 'finale', keys: [{ t: 6, x: 12, y: 3, z: 4 }] }, 'k3'), call('cinematic_summary', {}, 's1')] },
+    { content: 'Trois plans : ouverture, tour autour de toi, plan final.' },
+  ];
+  let q = 0, busy = 2; const waits = [], h2 = [], notes = [];
+  const r2 = await A.runTurn(H, h2, 'Fais-moi une cinématique stylée.', async () => (busy-- > 0 ? { error: 'Doucement : une demande à la fois.', status: 429 } : { ok: true, message: { role: 'assistant', ...real[q++] } }), ev => { if (ev.type !== 'action') notes.push(ev.type); }, 14, async t => { waits.push(t); });
+  const tool = id => JSON.parse(h2.find(m => m.tool_call_id === id).content), act = i => r2.actions[i];
+  ok('assistant : site occupé (429) → attente et nouvel essai', waits.join() === '1500,3000' && notes.includes('wait') && !r2.error && q === 5);
+  ok('assistant : liste d’entités jamais vide à tort (type approximatif, recherche sans résultat, rayon trop court)', tool('l1').total === 2 && tool('l1').entites.every(e => e.type === 'pnj') && tool('l2').total >= 3 && tool('l2').remarques.length === 1 && tool('l3').total >= 2 && tool('l4').total === 3 && act(0).ok && act(1).ok);
+  ok('assistant : paramètre manquant → valeur par défaut annoncée, ou erreur qui nomme le paramètre', tool('f1').ok && tool('f1').plan === 'moyen' && tool('f1').valeurs_par_defaut.some(x => x.startsWith('shot manquant')) && tool('f2').ok && tool('f2').plan === 'ensemble' && tool('f2').sujet === 'Lex' && tool('f2').creee === false && !tool('f5').ok && tool('f5').message.includes('« camera »'));
+  const orb = st.cams.find(c => c.name === 'Orbit Lex-chute');
+  ok('assistant : caméra réglée avant d’être créée → appel rejoué après la création, nom approché accepté', !!orb && orb.filter === 'cine' && Math.abs(orb.rt - 0.5) < 1e-9 && tool('u1').ok && tool('u1').message.includes('rejoué') && tool('k1').ok && orb.tracks.fov.some(k => k.t === 4000 && k.v === 40) && st.cams.filter(c => /orbit/i.test(c.name)).length === 1);
+  ok('assistant : set_keys crée la caméra quand il en donne la position', tool('k2').ok && tool('k2').message.includes('Caméra « Finale » créée') && !!st.cams.find(c => c.name === 'Finale'));
+  const sum2 = tool('s1');
+  ok('assistant : plan trop court refusé à la vérification, résumé conforme au montage réel', notes.includes('check') && h2.some(m => m.role === 'user' && m.content.includes('[Vérification automatique du Studio]') && m.content.includes('« Insert » trop court')) && !st.cams.some(c => c.name === 'Insert') && sum2.problemes.length === 0 && sum2.nombre_de_plans === 3 && sum2.plans.every(p => p.duree >= A.MIN_SHOT) && r2.text.includes('Montage réel : 3 plans') && r2.text.includes('« Finale » 6→10 s') && r2.recap.plans.length === 3 && A.SYSTEM_PROMPT.includes('Règles de montage OBLIGATOIRES'));
   const vip = await A.runTurn(H, [], 'Salut', async () => ({ error: 'Fonctionnalité Studio VIP', vip: false })), mute = await A.runTurn(H, [], 'Salut', async () => { throw new Error('coupé'); });
   ok('assistant : refus VIP et panne signalés', vip.error?.vip === false && vip.error.text === 'Fonctionnalité Studio VIP' && mute.error?.text === 'coupé' && !vip.changed);
 }

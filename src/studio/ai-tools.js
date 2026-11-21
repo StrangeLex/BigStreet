@@ -10,6 +10,14 @@ const r2 = v => Math.round(v * 100) / 100, r1 = v => Math.round(v * 10) / 10;
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v) ? +v : null);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const fmtT = ms => `${r2(ms / 1000)} s`;
+// (noms comparés sans casse, accents, espaces ni tirets : « Orbit_Mehdi chute » = « orbit mehdi-chute »)
+const nrm = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const pickKey = (table, v, syn = {}) => { const n = nrm(v).replace(/ /g, '_'); if (!n) return null; if (n in table) return n; if (syn[n]) return syn[n]; return Object.keys(table).find(k => k.replace(/_/g, '') === n.replace(/_/g, '')) || Object.keys(syn).find(k => n.includes(k)) && syn[Object.keys(syn).find(k => n.includes(k))] || null; };
+const SHOT_SYN = { plan_large: 'ensemble', large: 'ensemble', plan_d_ensemble: 'ensemble', wide: 'ensemble', tres_large: 'tres_large', aerien: 'tres_large', close_up: 'gros_plan', closeup: 'gros_plan', visage: 'gros_plan', gros: 'gros_plan', plan_moyen: 'moyen', medium: 'moyen', pied: 'moyen', rapproche: 'rapproche_poitrine', poitrine: 'rapproche_poitrine', taille: 'rapproche_taille', plan_americain: 'americain', demi: 'demi_ensemble', insert: 'tres_gros_plan', detail: 'tres_gros_plan' };
+const SIDE_SYN = { devant: 'face', avant: 'face', derriere: 'dos', arriere: 'dos', droite: 'profil_droit', gauche: 'profil_gauche', profil: 'profil_droit', trois_quarts: 'trois_quarts_droit', '3_4': 'trois_quarts_droit' };
+const HEIGHT_SYN = { oeil: 'yeux', normal: 'yeux', haut: 'plongee', dessus: 'plongee', bas: 'contre_plongee', dessous: 'contre_plongee', ras_du_sol: 'sol', drone: 'aerien', top: 'aerien' };
+const TYPE_SYN = { joueur: 'joueur', joueurs: 'joueur', player: 'joueur', players: 'joueur', pnj: 'pnj', npc: 'pnj', npcs: 'pnj', vehicule: 'vehicule', vehicules: 'vehicule', voiture: 'vehicule', voitures: 'vehicule', vehicle: 'vehicule', objet: 'objet', objets: 'objet', decor: 'objet', object: 'objet', personnage: 'personnages', personnages: 'personnages', perso: 'personnages', persos: 'personnages', character: 'personnages', characters: 'personnages', humain: 'personnages', humains: 'personnages' };
+export const MIN_SHOT = 1.5;   // (secondes : en dessous, un plan n'est pas lisible)
 
 export const SHOTS = {   // (hauteur d'image visible en mètres, hauteur visée sur le sujet, focale conseillée)
   tres_gros_plan: [0.5, 1.52, 30, 'très gros plan (les yeux, un détail)'], gros_plan: [0.9, 1.48, 35, 'gros plan (le visage)'], rapproche_poitrine: [1.25, 1.34, 40, 'plan rapproché poitrine'],
@@ -55,6 +63,16 @@ Si la demande est vague (« fais-moi une belle cinématique »), décide toi-mê
 - Suivi : pour un sujet qui se déplace, attache la caméra (parent) plutôt que d'empiler les clés ; regarde sa trajectoire (entity_path) pour le précéder ou le suivre, et place la caméra du côté où il va.
 - Rythme et durées : plan d'ensemble 4 à 6 s, plan moyen 3 à 5 s, gros plan 1,5 à 3 s, insert 1 à 2 s ; une action rapide se monte plus court, une émotion plus long. Ouvre large (où sommes-nous), resserre (qui, quoi), finis sur une image forte (gros plan ou plan large qui s'éloigne). Cale les coupes sur les événements (list_events : une parole, un geste, un coup, un départ).
 - Lisibilité : garde le sujet net et dans le cadre du début à la fin du plan (vérifie sa position au début ET à la fin avec get_entity ou entity_path) ; évite de traverser un mur (les outils te préviennent : rapproche la caméra ou change de côté) ; à l'intérieur, les pièces sont petites : focales 45–70° et distances courtes.
+
+# Règles de montage OBLIGATOIRES (le Studio les contrôle)
+- Le joueur est LE sujet : au moins deux plans sur trois sont sur lui. Un PNJ n'a un plan que s'il interagit avec le joueur (il lui parle, le touche, le suit) ou se trouve à moins de 5 m de lui au moment du plan ; jamais d'insert sur un inconnu au loin.
+- Aucun plan de moins de ${MIN_SHOT} s (vise 2,5 à 5 s). Si une action est brève, élargis le plan autour d'elle au lieu de le raccourcir.
+- La cinématique couvre tout le passage demandé sans trou : chaque plan commence exactement là où le précédent finit (mêmes instants), du début à la fin. Par défaut : tout le record.
+- Un plan = une caméra, créée AVANT d'être réglée : crée (frame_shot, create_camera, orbit_shot), puis seulement après update_camera / set_keys sur le même nom, écrit exactement pareil.
+- Alterne les valeurs de plan et change d'axe d'au moins 30° à chaque coupe ; pas deux plans d'ensemble ou aériens de suite ; respecte la règle des 180°.
+- frame_shot : donne toujours subject, shot, side, height et t.
+- AVANT ta réponse finale, appelle cinematic_summary : il donne la liste RÉELLE des plans et ses « problemes ». Corrige chaque problème signalé, rappelle-le, puis seulement résume — avec exactement le nombre de plans, les noms et les durées qu'il indique (une caméra peut ne pas être à l'antenne : ne compte que les plans listés).
+- « Fais la suite » : repars de la fin du montage existant (cinematic_summary → fin) et continue jusqu'à la fin du record, sans toucher aux plans déjà faits.
 
 # Apparence et scène
 - set_appearance change la tenue d'un personnage du record (corps, coiffure, couleurs, vêtements, skins, objet en main, sac) ; seuls les articles du compte de l'utilisateur sont permis (un administrateur a tout) — appearance_options te dit ce qui est possible, avec les numéros à utiliser. Un refus (« pas dans les skins du compte ») est normal : propose autre chose.
@@ -112,7 +130,8 @@ export function createEngine(H) {
   const C = H.C, ok = (text, data = {}) => ({ ok: true, text: `✓ ${text}`, data }), ko = text => ({ ok: false, text: `✗ ${text}`, data: {} });
   const ms = (v, def = null) => { const n = num(v); return n === null ? def : Math.round(clamp(n, 0, H.dur / 1000) * 1000); };
   const ent = q => (q == null || q === '' ? null : H.find(q));
-  const camOf = q => { const s = String(q ?? '').trim().toLowerCase(); return s ? H.cams.find(c => c.id === q || c.name.toLowerCase() === s) || H.cams.find(c => c.name.toLowerCase().includes(s)) || null : null; };
+  const camOf = q => { const s = nrm(q); return s ? H.cams.find(c => c.id === q) || H.cams.find(c => nrm(c.name) === s) || H.cams.find(c => nrm(c.name).replace(/ /g, '') === s.replace(/ /g, '')) || H.cams.find(c => nrm(c.name).includes(s) || s.includes(nrm(c.name))) || null : null; };
+  const noCam = (q, tool) => ({ ...ko(`Caméra « ${q ?? ''} » introuvable${H.cams.length ? ` (caméras existantes : ${H.cams.map(c => `« ${c.name} »`).join(', ')})` : ' (aucune caméra n’existe encore)'} : crée-la d’abord avec frame_shot, create_camera ou orbit_shot, puis rappelle ${tool}.`), retry: true });
   const headY = e => (e.kind === 'vehicule' ? 0.8 : e.kind === 'objet' ? 0.5 : 1.5);
   const pos = (e, t) => H.posAt(e.key, t);
   const target = (la, t) => { if (!la) return null; if (la.entity != null) { const e = ent(la.entity), p = e && pos(e, t); return p ? { x: p.x, y: p.y + headY(e) - (e.kind === 'vehicule' || e.kind === 'objet' ? 0 : 0.1), z: p.z, name: e.name } : null; } const x = num(la.x), y = num(la.y), z = num(la.z); return x === null || z === null ? null : { x, y: y ?? 1, z, name: 'le point' }; };
@@ -155,12 +174,17 @@ export function createEngine(H) {
     list_entities(a) {
       const t = ms(a.t, Math.round(H.T)), n = clamp(num(a.limit) ?? 40, 1, 120), me = H.entities().find(e => e.me), pm = me && pos(me, t), q = String(a.search || '').toLowerCase();
       const c = a.near != null ? (() => { const e = ent(a.near); return e && pos(e, t); })() : null; if (a.near != null && !c) return ko(`« ${a.near} » : entité introuvable.`);
-      let L = H.entities().filter(e => (!a.type || (a.type === 'personnages' ? e.kind === 'joueur' || e.kind === 'pnj' : e.kind === a.type)) && (!q || `${e.name} ${e.sub || ''} ${e.type || ''}`.toLowerCase().includes(q)));
-      if (!a.type && !q && !c) L = L.filter(e => e.kind !== 'objet');   // (le décor : seulement sur demande)
+      // (type et recherche tolérants : « npc », « personnage », « voitures »… ; un type inconnu ou une recherche sans résultat ne vide pas la liste)
+      const type = a.type ? TYPE_SYN[nrm(a.type).replace(/ /g, '_')] || null : null, notes = [], qn = nrm(a.search);
+      if (a.type && !type) notes.push(`type « ${a.type} » inconnu (joueur, pnj, vehicule, objet, personnages) : tout est listé`);
+      const ofType = e => !type || (type === 'personnages' ? e.kind === 'joueur' || e.kind === 'pnj' : e.kind === type);
+      let L = H.entities().filter(ofType); if (!type && !c) L = L.filter(e => e.kind !== 'objet' || qn);   // (le décor : seulement sur demande)
+      if (qn) { const F = L.filter(e => nrm(`${e.name} ${e.sub || ''} ${e.type || ''} ${e.id}`).includes(qn)); if (F.length) L = F; else { notes.push(`rien ne s’appelle « ${a.search} » : voici les entités les plus proches du joueur`); L = L.filter(e => e.kind !== 'objet'); } }
       let rows = L.map(e => { const b = entBrief(e, t), o = c || pm; if (o && b.x !== undefined) b.distance = r1(Math.hypot(b.x - o.x, b.z - o.z)); return b; });
-      if (c) rows = rows.filter(b => b.distance !== undefined && b.distance <= (num(a.radius) ?? 15));
       rows.sort((x, y) => (y.joueur ? 1 : 0) - (x.joueur ? 1 : 0) || (x.distance ?? 1e9) - (y.distance ?? 1e9));
-      return ok(`${rows.length} entité${rows.length > 1 ? 's' : ''} listée${rows.length > 1 ? 's' : ''} à ${fmtT(t)}.`, { t: r2(t / 1000), total: rows.length, entites: rows.slice(0, n) });
+      if (c) { const rad = num(a.radius) ?? 15, In = rows.filter(b => b.distance !== undefined && b.distance <= rad); if (In.length > 1 || (In.length && !rows.some(b => b.distance > rad))) rows = In; else { notes.push(`presque rien à moins de ${rad} m : voici les plus proches`); rows = rows.filter(b => b.distance !== undefined).slice(0, 12); } }
+      if (!rows.length && !type && !qn) notes.push('ce record ne contient aucun personnage ni véhicule');
+      return ok(`${rows.length} entité${rows.length > 1 ? 's' : ''} listée${rows.length > 1 ? 's' : ''} à ${fmtT(t)}${notes.length ? ` — ${notes.join(' ; ')}` : ''}.`, { t: r2(t / 1000), total: rows.length, entites: rows.slice(0, n), ...(notes.length ? { remarques: notes } : {}) });
     },
     get_entity(a) {
       const e = ent(a.entity); if (!e) return ko(`« ${a.entity} » : entité introuvable (list_entities donne les noms).`);
@@ -184,18 +208,20 @@ export function createEngine(H) {
     },
     list_cameras() { return ok(`${H.cams.length} caméra${H.cams.length > 1 ? 's' : ''}.`, { cameras: H.cams.map(camBrief) }); },
     get_camera(a) {
-      const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`);
+      const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil');
       const t = ms(a.t, Math.round(H.T)), w = C.worldPose(c, t, H.cams, H.frame), tr = {};
       for (const [ch] of C.PARAMS) if (c.tracks[ch].length) tr[ch === 'rt' ? 'raytracing' : ch] = c.tracks[ch].map(k => ({ t: r2(k.t / 1000), v: ['yaw', 'pitch', 'roll'].includes(ch) ? r1(k.v * R2D) : C.FX_CH.includes(ch) ? Math.round(k.v * 100) : r2(k.v), ...(k.ease !== 'fluide' ? { ease: k.ease } : {}) }));
       return ok(`${c.name} : ${C.keyTimes(c).length} instants-clés.`, { ...camBrief(c), cles_par_parametre: tr, repere_des_cles: c.parent ? `relatif à ${c.parent.name}` : 'monde', pose_monde: w ? { t: r2(t / 1000), x: r2(w.x), y: r2(w.y), z: r2(w.z), yaw: r1(w.yaw * R2D), pitch: r1(w.pitch * R2D), roll: r1(w.roll * R2D), fov: r1(w.fov), ...(w.lost ? { parent_absent: true } : {}) } : null });
     },
-    cinematic_summary() {
+    cinematic_summary(old = null) {   // (old : caméras d'avant ce tour — celles de l'utilisateur, qu'on ne lui reproche pas de laisser sans durée)
       const R = C.cineRange(H.cams); if (!R) return ok('Pas encore de cinématique : il faut au moins une caméra active avec deux clés.', { plans: [] });
       const cuts = new Set([R[0], R[1]]); for (const c of H.cams) if (c.on) { const K = C.keyTimes(c, C.CH); if (K.length) { cuts.add(K[0]); cuts.add(K[K.length - 1] + 1); } }
       const ts = [...cuts].filter(t => t >= R[0] && t <= R[1]).sort((x, y) => x - y), plans = [];
       for (let i = 0; i + 1 < ts.length; i++) { const c = C.activeCam(H.cams, (ts[i] + ts[i + 1]) / 2); if (!c) continue; const l = plans[plans.length - 1]; if (l && l.camera === c.name) l.fin = r2(ts[i + 1] / 1000); else plans.push({ camera: c.name, debut: r2(ts[i] / 1000), fin: r2(ts[i + 1] / 1000) }); }
       for (const p of plans) p.duree = r2(p.fin - p.debut);
-      return ok(`Cinématique : ${plans.length} plan${plans.length > 1 ? 's' : ''}, ${r1((R[1] - R[0]) / 1000)} s.`, { debut: r2(R[0] / 1000), fin: r2(R[1] / 1000), duree: r2((R[1] - R[0]) / 1000), plans });
+      const pb = problems(plans, R, old instanceof Set ? old : null), dur = H.dur / 1000, rest = [];   // (non couvert : une remarque, pas un défaut — on peut ne vouloir qu'un passage)
+      if (R[0] / 1000 > 2) rest.push(`le début du record (0 → ${r2(R[0] / 1000)} s) n’a pas de plan`); if (dur - R[1] / 1000 > 2) rest.push(`la fin du record (${r2(R[1] / 1000)} → ${r2(dur)} s) n’a pas de plan : pour tout couvrir, ajoute un plan final ou prolonge le dernier`);
+      return ok(`Cinématique : ${plans.length} plan${plans.length > 1 ? 's' : ''}, ${r1((R[1] - R[0]) / 1000)} s${pb.length ? ` — ${pb.length} problème${pb.length > 1 ? 's' : ''} à corriger` : ''}.`, { debut: r2(R[0] / 1000), fin: r2(R[1] / 1000), duree: r2((R[1] - R[0]) / 1000), nombre_de_plans: plans.length, plans, problemes: pb, ...(rest.length ? { non_couvert: rest } : {}), ...(pb.length ? {} : { verdict: 'montage correct : résume-le tel quel (mêmes plans, mêmes durées)' }) });
     },
     create_camera(a) {
       const t = ms(a.t, Math.round(H.T)), x = num(a.x), y = num(a.y), z = num(a.z); if (x === null || y === null || z === null) return ko('create_camera : x, y et z sont obligatoires.');
@@ -205,17 +231,17 @@ export function createEngine(H) {
       return ok(`Caméra « ${c.name} » créée à ${fmtT(t)} en (${r1(x)}, ${r1(y)}, ${r1(z)})${tg ? `, tournée vers ${tg.name}` : ''}${H.blocked(x, z) ? ' — ⚠ elle semble dans un mur ou hors du lieu' : ''}.`, { camera: c.name });
     },
     update_camera(a) {
-      const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`); const did = [];
+      const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil'); const did = [];
       if (a.name) { const old = c.name; c.name = String(a.name).slice(0, 40); for (const o of H.cams) if (o.parent?.kind === 'camera' && o.parent.id === c.id) o.parent.name = c.name; did.push(`renommée « ${c.name} » (ex-« ${old} »)`); }
       if (typeof a.active === 'boolean') { c.on = a.active; did.push(a.active ? 'active' : 'écartée de la cinématique'); }
       if (/^#[0-9a-f]{6}$/i.test(a.color || '')) { c.color = a.color; did.push('couleur changée'); }
       did.push(...applyImage(c, a));
       return did.length ? ok(`${c.name} : ${did.join(', ')}.`, { camera: c.name }) : ko('update_camera : rien à changer.');
     },
-    delete_camera(a) { const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`); H.cams = C.removeCam(H.cams, c, H.frame); return ok(`Caméra « ${c.name} » supprimée.`); },
-    duplicate_camera(a) { const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`); const d = C.newCam(H.cams); Object.assign(d, JSON.parse(JSON.stringify({ ...c, id: d.id, name: a.name ? String(a.name).slice(0, 40) : d.name, color: d.color }))); H.cams.push(d); return ok(`« ${c.name} » dupliquée en « ${d.name} ».`, { camera: d.name }); },
+    delete_camera(a) { const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil'); H.cams = C.removeCam(H.cams, c, H.frame); return ok(`Caméra « ${c.name} » supprimée.`); },
+    duplicate_camera(a) { const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil'); const d = C.newCam(H.cams); Object.assign(d, JSON.parse(JSON.stringify({ ...c, id: d.id, name: a.name ? String(a.name).slice(0, 40) : d.name, color: d.color }))); H.cams.push(d); return ok(`« ${c.name} » dupliquée en « ${d.name} ».`, { camera: d.name }); },
     set_parent(a) {
-      const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`);
+      const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil');
       if (a.parent === null || a.parent === '' || a.parent === 'null') { C.rebase(c, H.cams, H.frame, () => { c.parent = null; c.look = false; c.follow = false; }); return ok(`${c.name} détachée : elle est libre dans la scène.`); }
       const pc = camOf(a.parent), e = pc ? null : ent(a.parent);
       if (pc) { if (pc === c || C.wouldLoop(c, pc.id, H.cams)) return ko('Impossible : ces caméras se suivraient en boucle.'); }
@@ -226,8 +252,12 @@ export function createEngine(H) {
       return ok(`${c.name} attachée à ${P1.name}${c.follow ? ', tourne avec lui' : ''}${c.look ? ', le regarde' : ''} (sans bouger : ses clés sont maintenant relatives à ${P1.name}).`, { camera: c.name });
     },
     set_keys(a) {
-      const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable (create_camera ou frame_shot la crée).`);
-      if (!Array.isArray(a.keys) || !a.keys.length) return ko('set_keys : « keys » est vide.');
+      if (!Array.isArray(a.keys) || !a.keys.length) return ko('set_keys : il manque « keys » (liste de clés { t, x, y, z, yaw… }).');
+      let c = camOf(a.camera), born = false;
+      if (!c) {   // (caméra inconnue : créée d'ici si une clé donne sa position complète ; sinon l'appel sera rejoué après les créations du lot)
+        const k0 = a.keys.find(k => num(k?.t) !== null && num(k.x) !== null && num(k.y) !== null && num(k.z) !== null); if (!k0 || !a.camera) return noCam(a.camera, 'set_keys');
+        c = C.newCam(H.cams, { x: num(k0.x), y: num(k0.y), z: num(k0.z), yaw: (num(k0.yaw) ?? 0) * D2R, pitch: (num(k0.pitch) ?? 0) * D2R, roll: 0, fov: clamp(num(k0.fov) ?? 50, 5, 130) }, ms(k0.t)); c.name = String(a.camera).slice(0, 40); H.cams.push(c); born = true;
+      }
       const local = a.space === 'parent' && !!c.parent, notes = []; let n = 0; const times = [];
       for (const k of a.keys.slice(0, 200)) {
         const t = ms(k?.t); if (t === null) { notes.push('une clé sans instant a été ignorée'); continue; }
@@ -247,33 +277,42 @@ export function createEngine(H) {
       }
       if (!n) return ko(`set_keys : aucune valeur posée${notes.length ? ` (${notes.join(' ; ')})` : ''}.`);
       const S0 = Math.min(...times), S1 = Math.max(...times);
-      return ok(`${n} clé${n > 1 ? 's' : ''} posée${n > 1 ? 's' : ''} sur ${c.name} (${times.length > 1 ? `de ${fmtT(S0)} à ${fmtT(S1)}` : `à ${fmtT(S0)}`})${notes.length ? ` — ${notes.join(' ; ')}` : ''}.`, { camera: c.name, cles: n, ...(notes.length ? { remarques: notes } : {}) });
+      return ok(`${born ? `Caméra « ${c.name} » créée ; ` : ''}${n} clé${n > 1 ? 's' : ''} posée${n > 1 ? 's' : ''} sur ${c.name} (${times.length > 1 ? `de ${fmtT(S0)} à ${fmtT(S1)}` : `à ${fmtT(S0)}`})${notes.length ? ` — ${notes.join(' ; ')}` : ''}.`, { camera: c.name, cles: n, ...(notes.length ? { remarques: notes } : {}) });
     },
     delete_keys(a) {
-      const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`);
+      const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil');
       const chans = Array.isArray(a.params) && a.params.length ? a.params.map(p => FX[p] || p).filter(p => c.tracks[p]) : Object.keys(c.tracks); let n = 0;
       if (num(a.t) !== null) { const t = ms(a.t); for (const ch of chans) n += C.delAt(c, ch, t); }
       else { const t0 = ms(a.from, 0), t1 = ms(a.to, Math.round(H.dur)); for (const ch of chans) { const L = c.tracks[ch], m = L.length; c.tracks[ch] = L.filter(k => k.t < t0 || k.t > t1); n += m - c.tracks[ch].length; } }
       return n ? ok(`${n} clé${n > 1 ? 's' : ''} supprimée${n > 1 ? 's' : ''} sur ${c.name}.`) : ko(`Aucune clé à supprimer sur ${c.name} à cet endroit.`);
     },
-    set_ease(a) { const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`); if (!C.EASES[a.ease]) return ko(`Interpolation « ${a.ease} » inconnue.`); const t = ms(a.t), chans = Array.isArray(a.params) && a.params.length ? a.params.map(p => FX[p] || p).filter(p => c.tracks[p]) : [null]; if (!C.hasKey(c, null, t)) return ko(`${c.name} n’a pas de clé à ${fmtT(t)}.`); for (const ch of chans) C.easeAt(c, ch, t, a.ease); return ok(`${c.name} : interpolation « ${a.ease} » à ${fmtT(t)}.`); },
+    set_ease(a) { const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil'); if (!C.EASES[a.ease]) return ko(`Interpolation « ${a.ease} » inconnue.`); const t = ms(a.t), chans = Array.isArray(a.params) && a.params.length ? a.params.map(p => FX[p] || p).filter(p => c.tracks[p]) : [null]; if (!C.hasKey(c, null, t)) return ko(`${c.name} n’a pas de clé à ${fmtT(t)}.`); for (const ch of chans) C.easeAt(c, ch, t, a.ease); return ok(`${c.name} : interpolation « ${a.ease} » à ${fmtT(t)}.`); },
     move_keys(a) {
-      const c = camOf(a.camera); if (!c) return ko(`Caméra « ${a.camera} » introuvable.`); const sh = Math.round((num(a.shift) ?? 0) * 1000); if (!sh) return ko('move_keys : décalage nul.');
+      const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil'); const sh = Math.round((num(a.shift) ?? 0) * 1000); if (!sh) return ko('move_keys : décalage nul.');
       const t0 = ms(a.from, 0), t1 = ms(a.to, Math.round(H.dur)); let n = 0;
       for (const ch of Object.keys(c.tracks)) { for (const k of c.tracks[ch]) if (k.t >= t0 && k.t <= t1) { k.t = clamp(k.t + sh, 0, Math.round(H.dur)); n++; } C.sortTrack(c.tracks[ch], ch); c.tracks[ch] = c.tracks[ch].filter((k, j, L) => !j || k.t - L[j - 1].t > 0); }
       return n ? ok(`${n} clé${n > 1 ? 's' : ''} de ${c.name} décalée${n > 1 ? 's' : ''} de ${r2(sh / 1000)} s.`) : ko('Aucune clé dans cet intervalle.');
     },
     frame_shot(a) {
-      const e = ent(a.subject); if (!e) return ko(`Sujet « ${a.subject} » introuvable.`); const t = ms(a.t, Math.round(H.T));
-      if (!SHOTS[a.shot]) return ko(`Valeur de plan « ${a.shot} » inconnue (${Object.keys(SHOTS).join(', ')}).`);
-      const R = shotPose(e, t, a); if (!R) return ko(`${e.name} n’est pas là à ${fmtT(t)}.`);
+      // (paramètre manquant ou approximatif : une valeur par défaut sensée, dite dans le résultat — jamais d'échec pour ça)
+      const dflt = [], e = a.subject == null || a.subject === '' ? (dflt.push('subject → le joueur'), H.entities().find(x => x.me) || H.entities().find(x => x.kind !== 'objet')) : ent(a.subject);
+      if (!e) return ko(`frame_shot : sujet « ${a.subject} » introuvable (donne « subject » : un id, un nom de list_entities, ou "joueur").`);
+      if (!a.camera) return ko('frame_shot : il manque « camera » (le nom du plan, ex. « Plan large d’ouverture »).');
+      const t = ms(a.t, Math.round(H.T)); if (num(a.t) === null) dflt.push(`t → ${fmtT(t)} (instant courant)`);
+      const shot = pickKey(SHOTS, a.shot, SHOT_SYN) || (dflt.push(`shot ${a.shot == null ? 'manquant' : `« ${a.shot} » inconnu`} → moyen (valeurs : ${Object.keys(SHOTS).join(', ')})`), 'moyen');
+      const side = pickKey(SIDES, a.side, SIDE_SYN) || (a.side != null && dflt.push(`side « ${a.side} » inconnu → trois_quarts_droit`), 'trois_quarts_droit');
+      const height = pickKey(HEIGHTS, a.height, HEIGHT_SYN) || (a.height != null && dflt.push(`height « ${a.height} » inconnu → yeux`), 'yeux');
+      a = { ...a, shot, side, height, thirds: { gauche: 'gauche', left: 'gauche', droite: 'droite', right: 'droite' }[nrm(a.thirds)] || 'centre' };
+      const R = shotPose(e, t, a); if (!R) return ko(`${e.name} n’est pas là à ${fmtT(t)} (get_entity donne sa présence).`);
       const { c, made } = ensureCam(a.camera, t, R.pose);
       if (!made) writePose(c, t, c.look && c.parent ? { x: R.pose.x, y: R.pose.y, z: R.pose.z, fov: R.pose.fov, roll: 0 } : R.pose, false, C.EASES[a.ease] ? a.ease : null); else if (C.EASES[a.ease]) C.easeAt(c, null, t, a.ease);
-      return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}${R.name} sur ${e.name} à ${fmtT(t)} (${a.side || 'trois_quarts_droit'}, ${a.height || 'yeux'}, à ${r1(R.d)} m, focale ${Math.round(R.pose.fov)}°)${R.wall ? ' — rapprochée : un mur gênait' : ''}.`, { camera: c.name, creee: made, pose_monde: { x: r2(R.pose.x), y: r2(R.pose.y), z: r2(R.pose.z), yaw: r1(R.pose.yaw * R2D), pitch: r1(R.pose.pitch * R2D), fov: r1(R.pose.fov) }, distance: r1(R.d), ...(R.wall ? { mur: true } : {}) });
+      return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}${R.name} sur ${e.name} à ${fmtT(t)} (${a.side}, ${a.height}, à ${r1(R.d)} m, focale ${Math.round(R.pose.fov)}°)${R.wall ? ' — rapprochée : un mur gênait' : ''}${dflt.length ? ` — par défaut : ${dflt.join(' ; ')}` : ''}.`, { camera: c.name, creee: made, sujet: e.name, plan: shot, ...(dflt.length ? { valeurs_par_defaut: dflt } : {}), pose_monde: { x: r2(R.pose.x), y: r2(R.pose.y), z: r2(R.pose.z), yaw: r1(R.pose.yaw * R2D), pitch: r1(R.pose.pitch * R2D), fov: r1(R.pose.fov) }, distance: r1(R.d), ...(R.wall ? { mur: true } : {}) });
     },
     orbit_shot(a) {
-      const e = ent(a.subject); if (!e || e.kind === 'objet') return ko(`Sujet « ${a.subject} » introuvable (personnage ou véhicule).`);
-      const t0 = ms(a.from, 0), t1 = ms(a.to, Math.round(H.dur)); if (t1 - t0 < 300) return ko('orbit_shot : « to » doit être après « from ».');
+      const e = a.subject == null || a.subject === '' ? H.entities().find(x => x.me) : ent(a.subject); if (!e || e.kind === 'objet') return ko(`orbit_shot : sujet « ${a.subject} » introuvable (donne « subject » : un personnage ou un véhicule, ou "joueur").`);
+      if (!a.camera) return ko('orbit_shot : il manque « camera » (le nom du plan).');
+      const t0 = ms(a.from, Math.round(H.T)); let t1 = ms(a.to, Math.min(Math.round(H.dur), t0 + 4000)); if (t1 - t0 < MIN_SHOT * 1000) t1 = Math.min(Math.round(H.dur), t0 + 3000); if (t1 - t0 < 300) return ko('orbit_shot : « to » doit être après « from » (en secondes).');
+      a = { ...a, side: pickKey(SIDES, a.side, SIDE_SYN) || 'face' };
       const p0 = pos(e, t0); if (!p0) return ko(`${e.name} n’est pas là à ${fmtT(t0)}.`);
       const deg = num(a.degrees) ?? 120, d = clamp(num(a.distance) ?? 4, 0.6, 80), hy = (num(a.height) ?? 1.6) - C.ORIGIN_Y[e.kind === 'vehicule' ? 'vehicule' : 'perso'], fov = clamp(num(a.fov) ?? 45, 8, 120);
       const a0 = p0.yaw + (SIDES[a.side] ?? 0) * D2R, n = Math.max(2, Math.ceil(Math.abs(deg) / 30)), ease = C.EASES[a.ease] ? a.ease : 'fluide';
@@ -299,6 +338,14 @@ export function createEngine(H) {
     preview_cinematic() { return H.preview() ? ok('Prévisualisation lancée dans la vue.') : ko('Pas de cinématique à prévisualiser : il faut au moins une caméra active avec deux clés.'); },
     export_video() { return H.exportVideo() ? ok('Export vidéo lancé : la cinématique est filmée, le fichier .webm sera à côté du record.') : ko('Export impossible : il faut au moins une caméra active avec deux clés.'); },
   };
+  /** Ce qui cloche dans un montage (plans trop courts, caméras jamais à l'antenne, début ou fin non couverts) : des phrases pour l'assistant */
+  function problems(plans, R, old = null) {
+    const out = [], dur = H.dur / 1000;
+    for (const p of plans) if (p.duree < MIN_SHOT) out.push(`plan « ${p.camera} » trop court (${p.duree} s, de ${p.debut} à ${p.fin} s) : allonge-le à ${MIN_SHOT} s au moins (move_keys / set_keys) ou supprime sa caméra (delete_camera)`);
+    const air = new Set(plans.map(p => p.camera));
+    for (const c of H.cams) if (c.on && !air.has(c.name) && !old?.has(c.id)) out.push(C.keyTimes(c, C.CH).length < 2 ? `caméra « ${c.name} » : une seule clé, elle n’a pas de durée — ajoute sa clé de fin (frame_shot ou set_keys à un autre instant) ou supprime-la` : `caméra « ${c.name} » jamais à l’antenne (recouverte par une autre) : décale ses clés ou supprime-la`);
+    return out;
+  }
   function applyImage(c, a) {
     const did = [];
     if (typeof a.filter === 'string' && a.filter in C.FILTERS) { c.filter = a.filter; did.push(`filtre ${a.filter ? C.FILTERS[a.filter] : 'retiré'}`); }
@@ -316,6 +363,17 @@ export function createEngine(H) {
       let a = args; if (typeof a === 'string') { try { a = a.trim() ? JSON.parse(a) : {}; } catch { return ko(`${name} : arguments illisibles (JSON invalide).`); } }
       try { const r = fn(a && typeof a === 'object' ? a : {}); if (r.ok && byName.get(name).mut) H.changed(); return r; } catch (e) { return ko(`${name} : erreur (${String(e?.message || e).slice(0, 160)}).`); }
     },
+    /**
+     * Un lot d'appels du modèle, dans l'ordre. Un appel qui vise une caméra pas encore créée (le modèle règle parfois un plan avant de
+     * le créer dans le même lot) est rejoué une fois après les autres. calls : [{ name, args }] → [{ ok, text, data, name }] dans l'ordre d'origine.
+     */
+    batch(calls) {
+      const out = calls.map(c => ({ ...this.exec(c.name, c.args), name: c.name }));
+      out.forEach((r, i) => { if (!r.ok && r.retry) { const again = this.exec(calls[i].name, calls[i].args); if (again.ok) out[i] = { ...again, name: calls[i].name, text: `${again.text} (rejoué après la création de la caméra)` }; } });
+      return out;
+    },
+    /** Le montage réel, en une phrase, et ses problèmes : { text, plans, problems } */
+    recap(old = null) { const d = RUN.cinematic_summary(old).data; return { plans: d.plans || [], problems: d.problemes || [], text: d.plans?.length ? `Montage réel : ${d.plans.length} plan${d.plans.length > 1 ? 's' : ''}, ${d.duree} s — ${d.plans.map(p => `« ${p.camera} » ${p.debut}→${p.fin} s`).join(' · ')}.` : '' }; },
   };
 }
 
@@ -340,33 +398,51 @@ export function parseTextActions(text) {
  * history : messages au format OpenAI déjà échangés (sans le prompt système) ; il est complété sur place.
  * Rend { text, actions: [{ ok, text, name }], changed (le projet a été modifié), error }.
  */
-export async function runTurn(H, history, userText, ask, on = () => {}, maxRounds = 12) {
-  const eng = createEngine(H), actions = []; let changed = false, text = '', error = null;
+export async function runTurn(H, history, userText, ask, on = () => {}, maxRounds = 14, wait = ms => new Promise(r => setTimeout(r, ms))) {
+  const eng = createEngine(H), actions = [], old = new Set(H.cams.map(c => c.id)); let changed = false, text = '', error = null, checked = 0;
   history.push({ role: 'user', content: `${userText}\n\n[État du Studio] ${digest(H)}` });
+  const run = calls => { const R = eng.batch(calls); R.forEach(r => { if (r.ok && eng.isMutating(r.name)) changed = true; const a = { ok: r.ok, text: r.text, name: r.name }; actions.push(a); on({ type: 'action', ...a }); }); return R; };
   for (let round = 0; round < maxRounds; round++) {
     // (contexte borné : le prompt, puis les échanges les plus récents — un échange d'outils n'est jamais coupé en deux)
     let from = Math.max(0, history.length - 60); while (from > 0 && history[from].role !== 'user') from--;
-    let res; try { res = await ask({ messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history.slice(from)], tools: eng.tools }); } catch (e) { res = { error: String(e?.message || e) }; }
+    // (site occupé — 429, « Doucement », « Trop de requêtes » — : on attend et on réessaie, jusqu'à trois fois)
+    let res;
+    for (let tries = 0; ; tries++) {
+      try { res = await ask({ messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history.slice(from)], tools: eng.tools }); } catch (e) { res = { error: String(e?.message || e) }; }
+      const busy = res && !res.message && (res.status === 429 || /doucement|trop de requ|rate.?limit|déjà en cours/i.test(String(res.error || '')));
+      if (!busy || tries >= 3) break;
+      on({ type: 'wait', text: `Le site est occupé : nouvel essai dans ${[1.5, 3, 6][tries]} s…` }); await wait([1500, 3000, 6000][tries]);
+    }
     if (!res || res.error || !res.message) { error = { text: res?.error || 'L’assistant n’a pas répondu.', vip: res?.vip, login: res?.login }; break; }
     const m = res.message, calls = Array.isArray(m.tool_calls) ? m.tool_calls.filter(c => c?.function?.name) : [];
     if (calls.length) {
       history.push({ role: 'assistant', content: m.content || '', tool_calls: calls });
       if (m.content) { text = m.content; on({ type: 'say', text: m.content }); }
-      for (const c of calls) { const r = eng.exec(c.function.name, c.function.arguments); if (r.ok && eng.isMutating(c.function.name)) changed = true; const a = { ok: r.ok, text: r.text, name: c.function.name }; actions.push(a); on({ type: 'action', ...a });
-        history.push({ role: 'tool', tool_call_id: c.id || `call_${actions.length}`, content: JSON.stringify({ ok: r.ok, message: r.text, ...r.data }).slice(0, 14000) }); }
+      run(calls.map(c => ({ name: c.function.name, args: c.function.arguments }))).forEach((r, i) => history.push({ role: 'tool', tool_call_id: calls[i].id || `call_${actions.length}_${i}`, content: JSON.stringify({ ok: r.ok, message: r.text, ...r.data }).slice(0, 14000) }));
       continue;
     }
     const alt = parseTextActions(m.content);
     if (alt?.calls.length) {
-      history.push({ role: 'assistant', content: m.content }); const out = [];
+      history.push({ role: 'assistant', content: m.content });
       if (alt.message) { text = alt.message; on({ type: 'say', text: alt.message }); }
-      for (const c of alt.calls) { const r = eng.exec(c.name, c.args); if (r.ok && eng.isMutating(c.name)) changed = true; const a = { ok: r.ok, text: r.text, name: c.name }; actions.push(a); on({ type: 'action', ...a }); out.push({ outil: c.name, ok: r.ok, message: r.text, ...r.data }); }
+      const out = run(alt.calls).map(r => ({ outil: r.name, ok: r.ok, message: r.text, ...r.data }));
       history.push({ role: 'user', content: `[Résultats des outils] ${JSON.stringify(out).slice(0, 20000)}\nContinue (d'autres actions en JSON), ou conclus par une réponse en clair sans JSON.` });
       continue;
     }
-    text = String(m.content || '').trim() || (actions.length ? 'C’est fait.' : '…'); history.push({ role: 'assistant', content: text }); on({ type: 'say', text, final: true });
-    return { text, actions, changed, error: null };
+    text = String(m.content || '').trim() || (actions.length ? 'C’est fait.' : '…');
+    // (avant d'accepter la conclusion : le montage réel est contrôlé ; s'il a des défauts, l'assistant doit les corriger — deux fois au plus)
+    const rc = changed ? eng.recap(old) : null;
+    if (rc?.problems.length && checked < 2 && round < maxRounds - 1) {
+      checked++; history.push({ role: 'assistant', content: text });
+      history.push({ role: 'user', content: `[Vérification automatique du Studio] Le montage a encore ${rc.problems.length} problème(s) :\n- ${rc.problems.join('\n- ')}\n${rc.text}\nCorrige-les avec les outils, appelle cinematic_summary, puis donne ton résumé final — il doit correspondre exactement à la liste des plans.` });
+      on({ type: 'check', text: `Vérification du montage : ${rc.problems.length} défaut${rc.problems.length > 1 ? 's' : ''} à corriger…` });
+      continue;
+    }
+    // (le résumé du modèle est suivi du montage réel : ce que l'utilisateur lit correspond toujours à ce qui existe)
+    if (rc?.text) text += `\n\n${rc.text}${rc.problems.length ? `\n⚠ ${rc.problems.join('\n⚠ ')}` : ''}`;
+    history.push({ role: 'assistant', content: text }); on({ type: 'say', text, final: true });
+    return { text, actions, changed, error: null, recap: rc };
   }
-  if (!error) { text = text || 'J’ai fait une première série d’actions ; dis-moi si je continue.'; history.push({ role: 'assistant', content: text }); }
+  if (!error) { const rc = changed ? eng.recap(old) : null; text = `${text || 'J’ai fait une première série d’actions ; dis-moi si je continue.'}${rc?.text ? `\n\n${rc.text}` : ''}`; history.push({ role: 'assistant', content: text }); }
   return { text, actions, changed, error };
 }

@@ -32,7 +32,7 @@ export function createAI(S) {
     chat.forEach((m, i) => {
       if (m.role === 'user') { kids.push(el('div', { class: 'ai-msg user', text: m.text })); return; }
       const acts = m.actions.length ? el('div', { class: 'ai-acts' }, ...m.actions.map(a => el('div', { class: 'ai-act' + (a.ok ? '' : ' ko'), text: a.text }))) : null;
-      kids.push(el('div', { class: 'ai-msg bot' + (m.error ? ' err' : '') }, acts, m.text ? el('div', { class: 'ai-text', text: m.text }) : null, m.pending ? el('div', { class: 'ai-wait' }, el('i'), el('i'), el('i')) : null,
+      kids.push(el('div', { class: 'ai-msg bot' + (m.error ? ' err' : '') }, acts, m.text ? el('div', { class: 'ai-text', text: m.text }) : null, m.pending && m.note ? el('div', { class: 'ai-err', text: m.note }) : null, m.pending ? el('div', { class: 'ai-wait' }, el('i'), el('i'), el('i')) : null,
         m.error ? el('div', { class: 'ai-err', text: `⚠ ${m.error}` }) : null,
         !m.pending && m.changed ? el('button', { class: 'ai-back', title: 'Remet le projet (caméras, clés, apparences) et la conversation dans l’état d’avant ce message', text: '↩ Revenir à avant ce message', onclick: () => rollback(i - 1) }) : null));
     });
@@ -47,7 +47,7 @@ export function createAI(S) {
     const user = { role: 'user', text, snap: S.snapshot(), hLen: history.length }, bot = { role: 'assistant', text: '', actions: [], pending: true };
     chat.push(user, bot); render();
     let res;
-    try { res = await runTurn(S.host(), history, text, ask, ev => { if (ev.type === 'action') bot.actions.push({ ok: ev.ok, text: ev.text }); else if (ev.type === 'say') bot.text = ev.text; render(); }); }
+    try { res = await runTurn(S.host(), history, text, ask, ev => { if (ev.type === 'action') bot.actions.push({ ok: ev.ok, text: ev.text }); else if (ev.type === 'say') { bot.text = ev.text; bot.note = ''; } else if (ev.type === 'wait' || ev.type === 'check') bot.note = ev.text; render(); }); }
     catch (e) { console.error(e); res = { text: '', actions: bot.actions, changed: S.snapshot() !== user.snap, error: { text: String(e?.message || e) } }; }
     bot.pending = false; bot.text = res.text || bot.text; bot.changed = res.changed || S.snapshot() !== user.snap;
     if (res.error) { bot.error = res.error.text; if (res.error.vip === false) { S.account().vip = false; } if (!bot.actions.length) history.length = user.hLen; }
