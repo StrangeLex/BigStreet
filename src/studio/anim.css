@@ -1,0 +1,45 @@
+/* Big Street Studio — éléments animés (anim.js) : section « Éléments » de l'onglet Scène, panneau de réglages, lignes de la frise */
+.an-box { display: grid; gap: 1px; padding: 8px 10px 0; user-select: none; max-height: 46%; overflow-y: auto; flex: none; }
+.an-box::-webkit-scrollbar { width: 6px; } .an-box::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.an-add { display: flex; flex-wrap: wrap; gap: 4px; padding-bottom: 4px; } .an-add .btn.small { height: 24px; padding: 0 7px; font-size: 11.5px; }
+.an-cat { display: grid; gap: 4px; padding: 4px 0 6px; } .an-cat input { color: var(--txt); width: 100%; }
+.an-cat-list { max-height: 190px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; background: #0c111d; }
+.an-cat-row { display: flex; gap: 6px; padding: 3px 8px; cursor: pointer; font-size: 12px; } .an-cat-row:hover { background: #1d2540; } .an-cat-row span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .an-cat-row small { color: var(--mut); white-space: nowrap; }
+.an-group { cursor: default; } .an-row { padding-right: 4px; }
+.an-panel { top: 50px; right: 10px; width: 292px; max-height: calc(100% - 64px); overflow-y: auto; gap: 6px; padding: 12px 14px; z-index: 4; }
+.an-panel::-webkit-scrollbar { width: 6px; } .an-panel::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+#stage.has-pip .an-panel { max-height: calc(100% - 78px - var(--pip-h, 130px)); }
+.an-panel h4 { margin: 6px 0 0; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--mut); font-weight: 700; } .an-panel h4 small { text-transform: none; letter-spacing: 0; font-weight: 400; }
+.an-panel label, #entPanel .p-grid label, #entPanel label.sl, #entPanel .an-bone label { display: grid; grid-template-columns: 1fr; gap: 2px; color: var(--mut); min-width: 0; font-size: 12px; }
+.an-panel label.row2 { grid-template-columns: 84px 1fr; align-items: center; gap: 6px; }
+.an-panel label.row, #entPanel label.row { display: flex; align-items: center; gap: 6px; color: var(--txt); grid-template-columns: none; }
+.an-panel input:not([type=checkbox]):not([type=range]):not([type=color]), .an-panel select, .an-panel textarea, #entPanel .p-grid input, #entPanel .an-bone input, #entPanel .an-line input[type=number], #entPanel textarea { width: 100%; min-width: 0; color: var(--txt); padding: 4px 6px; }
+.an-panel input[type=number]::-webkit-inner-spin-button, #entPanel input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.an-panel input[type=color], #entPanel input[type=color] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 7px; background: none; cursor: pointer; }
+.an-panel textarea { min-height: 54px; resize: vertical; font: inherit; }
+.fl { display: flex; align-items: center; gap: 2px; font-size: 11.5px; white-space: nowrap; } .fl b { margin-left: auto; color: var(--txt); font-weight: 600; }
+.an-line { display: flex; align-items: center; gap: 14px; } .an-line label.row input[type=number] { width: 62px; }
+.an-bone { display: grid; grid-template-columns: 82px 1fr 1fr 1fr; gap: 4px; align-items: end; } .an-bone > b { font-size: 11.5px; font-weight: 600; color: #c9d2e8; padding-bottom: 5px; }
+.an-clip { display: flex; align-items: center; gap: 6px; font-size: 12px; } .an-clip span { flex: 1; cursor: pointer; } .an-clip .eye { border: 0; background: transparent; cursor: pointer; color: var(--mut); }
+.an-sep { margin-top: 6px; } .an-sep-line { height: 1px; background: var(--line); margin-top: 6px; }
+.an-clipmark { position: absolute; top: 1px; font-size: 8px; color: #ffd23d; margin-left: -3px; pointer-events: none; }
+.tl-extra { display: inline-flex; gap: 6px; align-items: center; }
+/* Frise : boutons ajoutés, zoom, boucle, marqueurs */
+.tr-head.ruler-head { gap: 2px; } .tl-extra { margin-left: auto; gap: 1px; } .tr-head .an-tl { width: 20px; height: 20px; font-size: 10.5px; letter-spacing: 0; opacity: .7; } .tr-head .an-tl.on { opacity: 1; background: #1f3a2a; }
+.an-zoomv { font-size: 10px; color: var(--mut); min-width: 20px; text-align: center; letter-spacing: 0; text-transform: none; }
+#tracks.an-zoomed { overflow-x: clip; } #tracks.an-zoomed .ruler-head { position: relative; z-index: 3; background: #101624; }
+.tr-wrap.an-zoomed .tr-head { position: sticky; left: 0; z-index: 2; background: #101624; } .tr-wrap.an-zoomed .tr-head.sel { background: #1d2540; }
+.tr-wrap.an-zoomed .tr-empty, .tr-wrap.an-zoomed .an-sep-line { position: sticky; left: 0; }
+.an-marks { position: absolute; inset: 0; pointer-events: none; } .an-mark { position: absolute; top: -3px; margin-left: -2px; font-size: 12px; pointer-events: auto; cursor: pointer; text-shadow: 0 1px 2px #000; z-index: 2; }
+.an-loop { position: absolute; top: 0; bottom: 0; background: rgba(61, 220, 132, .16); border-left: 2px solid #3ddc84; border-right: 2px solid #3ddc84; }
+/* Cadre : bandes au format, grille des tiers, zones sûres */
+.an-guide { position: absolute; inset: 0; pointer-events: none; z-index: 2; } .an-guide > i { position: absolute; background: #000; }
+.an-frame { position: absolute; inset: 0; }
+.an-frame.thirds { background: linear-gradient(to right, transparent calc(33.333% - 1px), rgba(255, 255, 255, .38) calc(33.333% - 1px) 33.333%, transparent 33.333% calc(66.666% - 1px), rgba(255, 255, 255, .38) calc(66.666% - 1px) 66.666%, transparent 66.666%),
+  linear-gradient(to bottom, transparent calc(33.333% - 1px), rgba(255, 255, 255, .38) calc(33.333% - 1px) 33.333%, transparent 33.333% calc(66.666% - 1px), rgba(255, 255, 255, .38) calc(66.666% - 1px) 66.666%, transparent 66.666%); }
+.an-frame .safe { display: none; position: absolute; border: 1px dashed rgba(255, 210, 61, .7); } .an-frame.safes .safe { display: block; } .an-frame .safe.a { inset: 5%; } .an-frame .safe.t { inset: 10%; border-color: rgba(61, 214, 208, .7); }
+.an-panel { grid-template-columns: minmax(0, 1fr); } .an-panel .e-kind { overflow: hidden; text-overflow: ellipsis; max-width: 55%; } .an-panel .e-name { white-space: nowrap; }
+.an-panel .p-grid label.row2, #entPanel .p-grid label.row2 { grid-template-columns: 1fr; gap: 2px; } .an-panel .p-grid { grid-template-columns: 1fr 1fr 1fr; }
+.an-panel small.muted, #entPanel small.muted { white-space: normal; overflow-wrap: anywhere; }
+.an-ov { position: absolute; inset: 0; width: 100%; height: 100%; }
+.an-block { position: absolute; top: 2px; height: calc(100% - 4px); border-radius: 4px; background: color-mix(in srgb, var(--c) 22%, transparent); border: 1px solid color-mix(in srgb, var(--c) 60%, transparent); cursor: grab; }

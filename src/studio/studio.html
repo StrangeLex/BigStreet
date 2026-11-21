@@ -5,6 +5,7 @@
   <title>Big Street Studio</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="stylesheet" href="/__studio/studio.css">
+  <link rel="stylesheet" href="/__studio/anim.css">
 </head>
 <body>
   <div id="app">
@@ -87,6 +88,10 @@
             <tr><td>Suppr</td><td>supprimer la clé sélectionnée — sinon la caméra sélectionnée</td></tr>
             <tr><td>Ctrl+Z · Ctrl+Y</td><td>annuler · rétablir (Ctrl+S : enregistrer, Ctrl+D : dupliquer la caméra)</td></tr>
             <tr><td>Glisser une clé</td><td>aimantée à la tête de lecture, aux autres clés, à la seconde (Alt : libre)</td></tr>
+            <tr><td>Clic sur un objet, un personnage</td><td>le sélectionner : poignées L déplacer · R tourner · T taille ; K : image-clé (Alt+clic : un bâtiment)</td></tr>
+            <tr><td>Onglet Scène → ＋</td><td>ajouter PNJ, faux joueur, objet, lumière, miroir, texte ; régler l’éclairage du lieu</td></tr>
+            <tr><td>Ctrl / Maj + clic sur des clés</td><td>en sélectionner plusieurs (Ctrl+C / Ctrl+V : copier / coller ; Suppr ; glisser : toutes ensemble)</td></tr>
+            <tr><td>Maj+← → · M · Ctrl+molette</td><td>clé précédente / suivante · marqueur · zoom de la frise (🔁 : boucle)</td></tr>
             <tr><td>P</td><td>prévisualiser la cinématique</td></tr>
             <tr><td>J · V · N · Tab</td><td>aller au joueur · vue du joueur · pseudos · liste</td></tr>
           </table>
@@ -116,6 +121,7 @@
           <div id="pParentInfo" class="p-parent"></div>
           <label class="row"><input type="checkbox" id="pFollow"> Tourner avec le parent</label>
           <label class="row"><input type="checkbox" id="pLook"> Regarder le parent</label>
+          <label class="row" title="Vue subjective : la caméra est AUX YEUX du personnage parent et regarde où il regardait dans le record (sa tête est masquée). Les angles de la caméra s’ajoutent à son regard."><input type="checkbox" id="pPov"> Vue subjective (par ses yeux)</label>
           <h4>Filtre</h4>
           <label><select id="pFilter"></select></label>
           <label>Vignette <b id="pVignetteV"></b><input type="range" id="pVignette" min="0" max="1" step="0.05"></label>
@@ -123,6 +129,13 @@
           <label>Flou de profondeur <b id="pDofV"></b><input type="range" id="pDof" min="0" max="1" step="0.05"></label>
           <h4>Lumière</h4>
           <label title="0 : rendu normal. Jusqu’à 100 : occlusion ambiante fine (les creux et les contacts s’assombrissent), halo des lumières, reflets du sol mouillé, contraste — dosés selon la valeur. Animable par images-clés.">Raytracing <b id="pRtV"></b><input type="range" id="pRt" min="0" max="1" step="0.01"></label>
+          <small class="muted" id="pRtNote"></small>
+          <details class="p-fine"><summary title="Réglages propres à cette caméra : 100 % = le dosage normal du raytracing">Réglages fins du raytracing</summary>
+            <label title="Force de l’occlusion ambiante : les creux, les angles et les contacts s’assombrissent plus ou moins">Occlusion (force) <b id="pRtAoV"></b><input type="range" id="pRtAo" min="0" max="2" step="0.05"></label>
+            <label title="Rayon de l’occlusion : petit = contacts fins, grand = ombres douces et larges">Occlusion (rayon) <b id="pRtRadV"></b><input type="range" id="pRtRad" min="0.2" max="2" step="0.05"></label>
+            <label title="Halo autour des lumières et des surfaces très claires">Halo des lumières <b id="pRtBloomV"></b><input type="range" id="pRtBloom" min="0" max="2" step="0.05"></label>
+            <label title="Reflets sur les sols et les surfaces à plat (à partir de 30 de raytracing)">Reflets <b id="pRtReflV"></b><input type="range" id="pRtRefl" min="0" max="2" step="0.05"></label>
+          </details>
           <label class="row" title="Ombres portées en temps réel dans la vue de cette caméra (soleil, lune ou éclairage de la pièce)"><input type="checkbox" id="pShadow"> Ombre</label>
           <div class="p-btns"><button class="btn small" id="pView">🎥 Vue caméra</button><button class="btn small" id="pDup" title="Dupliquer cette caméra">Dupliquer</button><button class="btn small danger" id="pDelCam">🗑 Supprimer la caméra</button></div>
         </div>
@@ -151,7 +164,7 @@
           <span class="grow"></span>
           <button class="btn" id="preview" title="Prévisualiser la cinématique : les caméras actives s’enchaînent (P)">🎬 Prévisualiser</button>
           <button class="btn" id="saveProj" title="Enregistrer le projet de cinématique à côté du record">💾</button>
-          <button class="btn" id="export" title="Exporter la cinématique en vidéo (.webm)">⏺ Exporter</button>
+          <button class="btn" id="export" title="Exporter la cinématique en vidéo : WebM, MP4, AVI ou GIF — format, compression, nom, début et fin">⏺ Exporter</button>
         </div>
         <div id="tracks">
           <div class="tr-head ruler-head"><span class="muted">Caméras</span></div>

@@ -24,6 +24,7 @@ b { font-weight: 800; }
 .rec .tags { display: flex; gap: 5px; margin-top: 2px; }
 .tag { font-size: 10.5px; padding: 1px 7px; border-radius: 999px; background: #243055; color: #b9c6ea; }
 .tag.cine { background: #4a2c12; color: #ffc089; } .tag.live { background: #4a1616; color: #ff9c9c; }
+.tag.rid { background: transparent; border: 1px solid var(--line); color: var(--mut); font-family: ui-monospace, Consolas, monospace; cursor: copy; }
 .rec .del { position: absolute; right: 8px; top: 8px; width: 24px; height: 24px; border: 0; border-radius: 7px; background: transparent; cursor: pointer; opacity: 0; }
 .rec:hover .del { opacity: .7; } .rec .del:hover { opacity: 1; background: #3a1c1c; }
 .day { color: var(--mut); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; padding: 6px 4px 0; }

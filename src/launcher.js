@@ -222,13 +222,44 @@ $('#logout').onclick = async () => {
   authMode(false);
 };
 
-$('#play').onclick = async () => {
+// Le launcher reste ouvert pendant la partie : il le montre (« Jeu en cours ») et « Lancer » devient « Revenir au jeu ».
+let gameRunning = false, updatingNow = false;
+function paintGame(running) {
+  gameRunning = !!running;
+  $('#playBox').classList.toggle('running', gameRunning);
+  if (!updatingNow) $('#play').textContent = gameRunning ? 'Revenir au jeu' : 'Lancer Big Street';
+}
+bs.onGameState(s => paintGame(s?.running));
+
+// Mise à jour du launcher déclenchée par « Lancer » : progression sur le décor, puis relance (le jeu s'ouvrira tout seul).
+bs.onUpdate(u => {
+  const box = $('#playBox'), say = t => { $('#updState').textContent = t; };
+  const bar = p => { $('#updBar').firstElementChild.style.width = Math.max(0, Math.min(100, p)) + '%'; };
+  if (u?.state === 'check') return;                      // (vérification rapide : rien à montrer)
+  if (u?.state === 'download') {
+    updatingNow = true; box.classList.add('updating'); bar(u.percent || 0);
+    say(`Mise à jour du launcher vers ${u.version}… ${u.percent || 0} %`);
+    $('#play').disabled = true; $('#play').textContent = 'Mise à jour…';
+  } else if (u?.state === 'restart') {
+    updatingNow = true; box.classList.add('updating'); bar(100);
+    say(`Mise à jour ${u.version} prête : le launcher redémarre, puis le jeu s’ouvre tout seul.`);
+    $('#play').disabled = true; $('#play').textContent = 'Redémarrage…';
+  } else {
+    // (rien à faire, ou échec : le jeu s'ouvre quand même, la mise à jour se refera plus tard)
+    updatingNow = false; box.classList.remove('updating');
+    if (!gameRunning) $('#play').textContent = 'Lancer Big Street';
+  }
+});
+
+$('#play').onclick = async (ev, opts) => {
   // Les messages du lancement s'écrivent sur le décor : c'est le seul endroit
   // visible à ce moment-là.
   const say = t => { $('#heroState').textContent = t; };
   const before = $('#heroState').textContent;
+  if (gameRunning) { await bs.play(); return; }          // (« Revenir au jeu » : la fenêtre du jeu repasse devant)
   $('#play').disabled = true; say('Ouverture du jeu…');
-  const r = await bs.play();
+  const r = await bs.play(opts);
+  if (r.updating) return;                                // (le launcher redémarre : le bouton reste « Redémarrage… »)
   $('#play').disabled = false;
   say(r.ok ? before : (r.error || 'Lancement impossible.'));
 };
@@ -539,7 +570,7 @@ async function loadVersion() {
   const st = $('#verState');
   if (!v.latest) { st.className = 'state'; st.textContent = 'Impossible de vérifier (hors ligne ?)'; }
   else if (v.upToDate) { st.className = 'state ok'; st.textContent = '✓ À jour'; }
-  else { st.className = 'state up'; st.textContent = `Mise à jour vers ${v.latest} au prochain démarrage`; }
+  else { st.className = 'state up'; st.textContent = `Mise à jour vers ${v.latest} : installée au clic sur « Lancer Big Street »`; }
 }
 
 // Désinstallation : un premier clic prévient, le second lance vraiment.
@@ -590,7 +621,7 @@ document.addEventListener('keydown', e => {
   await refreshInstall().catch(() => {});   // (dossier et état visibles même déconnecté)
   bs.version().then(v => {
     versionInfo = v;
-    $('#verLine').textContent = `Launcher ${v.current}${v.latest && !v.upToDate ? ` — ${v.latest} au prochain démarrage` : ''}`;
+    $('#verLine').textContent = `Launcher ${v.current}${v.latest && !v.upToDate ? ` — ${v.latest}, installée au lancement du jeu` : ''}`;
   }).catch(() => {});
   const acc = await accP.catch(() => null);
   if (acc?.offline) {
@@ -601,8 +632,11 @@ document.addEventListener('keydown', e => {
     msg.className = 'msg err';
     msg.textContent = 'Site injoignable : impossible de vérifier ta session. Vérifie ta connexion, puis relance le launcher.';
   } else showAccount(acc);
+  paintGame((await bs.gameState().catch(() => null))?.running);
   // (l'interface est dans son état réel : la fenêtre peut apparaître)
   bs.uiReady();
+  // Relance après une mise à jour faite au clic sur « Lancer » : le jeu s'ouvre tout seul (une fois, et seulement connecté).
+  if (await bs.autoPlay().catch(() => false) && connected && !gameRunning) $('#play').onclick(null, { afterUpdate: true });
   const st = await bs.installState();
   paintDownload(st);
   if (st.state === 'download' || st.state === 'list') watchInstall();

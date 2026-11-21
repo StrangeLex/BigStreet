@@ -11,6 +11,12 @@ import { createPip } from '/__studio/pip.js';
 import { createScene } from '/__studio/scene.js';
 import { createAI } from '/__studio/ai.js';
 import * as CAMS from '/__studio/cams.js';
+import { createGeoKit, createGeoExt } from '/__studio/ai-tools-geo.js';
+import { createMonde } from '/__studio/world.js';
+import { createExport } from '/__studio/export.js';
+import { createMondeExt } from '/__studio/ai-tools-monde.js';
+import { createAnim } from '/__studio/anim.js';
+import { createAnimExt } from '/__studio/ai-tools-anim.js';
 
 const $ = s => document.querySelector(s);
 const api = window.bsStudio, API = 1;   // (API : version du module /js/studio-play.js attendue — STUDIO_API)
@@ -38,6 +44,16 @@ let speed = 12, cams = [], selId = null, selCh = null, selT = null, saveTimer = 
 const held = new Set();
 let account = null, SH = null, fxPip = null, lastCamId = null;   // (compte connecté au launcher ; données du jeu — styles, skins ; image de l'aperçu)
 let ents = cleanEnts(null);   // (apparences changées et entités masquées : enregistrées dans le projet, jamais dans le record)
+// (modules qui ajoutent leurs données au projet, sous leur clé — « monde » : world.js — : { save() → valeur | undefined, load(valeur | null),
+// has(), keyTimes(), clampTimes(durée), renderTrack(wrap, durée) } — enregistrés, rechargés, annulés (Ctrl+Z, IA) avec le reste)
+const extras = new Map();
+let monde = null, xp = null, frameHold = false;   // (xp : la page « Exporter » — export.js ; frameHold : l'export dessine lui-même chaque image)
+let anim = null;   // (éléments animés façon Mine-Imator : objets, PNJ ajoutés, lumières, miroirs, poses — anim.js, clé « anim » du projet)
+const extrasSave = () => { const o = {}; for (const [k, x] of extras) { const v = x.save(); if (v !== undefined) o[k] = v; } return o; };
+const extrasLoad = o => { for (const [k, x] of extras) { try { x.load(o?.[k] ?? null); } catch (e) { console.warn('projet :', k, e); } } };
+const packAll = () => JSON.stringify({ ...JSON.parse(packProject(cur.name, rate, cams, ents)), ...extrasSave() });
+/** Tous les instants où une image-clé est posée sur la frise (caméras et modules) */
+const allKeyTimes = () => [...cams.flatMap(c => keyTimes(c)), ...[...extras.values()].flatMap(x => x.keyTimes?.() || [])];
 try { const s = JSON.parse(localStorage.getItem('studio.view') || '{}'); if (s.dist) view.dist = clamp(+s.dist, 60, 600); if (s.speed) speed = clamp(+s.speed, 1, 120); } catch { /* réglages par défaut */ }
 const keepView = () => { try { localStorage.setItem('studio.view', JSON.stringify({ dist: view.dist, speed })); } catch { /* tant pis */ } };
 const selCam = () => cams.find(c => c.id === selId) || null;
@@ -59,7 +75,8 @@ async function refresh() {
       el('div', { class: 'name', text: it.roomName || it.room || 'Lieu inconnu' }),
       el('div', { class: 'meta' }, el('span', { text: d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) }), el('span', { text: fmtDur(it.dur || 0) }), el('span', { text: fmtSize(it.size) }), el('span', { text: `rayon ${it.radius}` })),
       el('div', { class: 'tags' }, it.player ? el('span', { class: 'tag', text: it.player }) : null, it.auto ? el('span', { class: 'tag', text: 'auto' }) : null,
-        it.project ? el('span', { class: 'tag cine', text: '🎬 cinématique' }) : null, it.done ? null : el('span', { class: 'tag live', text: 'interrompu' })),
+        it.project ? el('span', { class: 'tag cine', text: '🎬 cinématique' }) : null, it.done ? null : el('span', { class: 'tag live', text: 'interrompu' }),
+        it.id ? el('span', { class: 'tag rid', text: `#${it.id.slice(0, 8)}`, title: `Identifiant unique du record : ${it.id} (clic : le copier)`, onclick: e => { e.stopPropagation(); navigator.clipboard?.writeText(it.id).then(() => toast('Identifiant du record copié.'), () => {}); } }) : null),
       el('button', { class: 'del', title: 'Supprimer ce record', text: '🗑', onclick: async e => { e.stopPropagation(); const x = await api.remove(it.name); if (x?.ok) { if (cur?.name === it.name) closeRecord(); refresh(); } } }));
     box.append(card);
   }
@@ -80,6 +97,7 @@ async function engine() {
     change: (id, patch) => { const c = cams.find(x => x.id === id); if (c) { setWorld(c, patch); renderTracks(); } },
     drag: on => { if (!on) { touch(); renderTracks(); } },
   });
+  try { await anim?.engine(lib.THREE, giz); } catch (e) { console.warn('éléments animés indisponibles', e); }   // (réserve de lumières : avant le premier lieu)
   try { SH = await import('/js/shared.js'); } catch (e) { console.warn('données du jeu indisponibles (apparences)', e); SH = null; }
   fxPip = createFX(lib.THREE, world); pip = createPip(lib.THREE, world, giz, fxPip, $('#pipCv'));
   giz.setEnabled(document.pointerLockElement !== $('#view'));
@@ -91,6 +109,7 @@ function busy(text) { $('#loading').hidden = !text; if (text) { $('#loadingText'
 
 function closeRecord() {
   pb = null; rec = null; cur = null; playing = false; mode = 'free'; cams = []; selId = null; selCh = null; selT = null; modalEnd(false); ents = cleanEnts(null); scene?.close(); ai?.close();
+  extrasLoad(null); monde?.close(); xp?.close(); api.current?.(null).catch?.(() => {});
   for (const id of ['#dock', '#topbar', '#settings', '#help', '#props', '#entPanel', '#pip']) $(id).hidden = true;
   $('#stage').classList.remove('has-pip');
   giz?.clear(); if (world) world.post = null;
@@ -112,7 +131,10 @@ async function openRecord(it) {
     rec = next; pb = p; cur = it; T = 0; seekNext = true;
     Object.assign(cam, { roll: 0, fov: 60 }); behindPlayer(0);
     cams = []; selId = null; selCh = null; selT = null; ents = cleanEnts(null);
-    try { const pj = loadProject(JSON.parse(await api.loadProject(it.name) || 'null')); cams = pj.cams; ents = pj.ents; setRate(pj.rate); } catch { /* pas de projet */ }
+    let raw = null;
+    try { raw = JSON.parse(await api.loadProject(it.name) || 'null'); const pj = loadProject(raw); cams = pj.cams; ents = pj.ents; setRate(pj.rate); } catch { /* pas de projet */ }
+    extrasLoad(raw); for (const x of extras.values()) x.clampTimes?.(rec.dur);
+    api.current?.(it.name).catch?.(() => {});   // (le record ouvert : l'assistant IA l'envoie une fois au site, par son identifiant)
     for (const c of cams) for (const L of Object.values(c.tracks)) for (const k of L) k.t = clamp(k.t, 0, rec.dur);
     relinkParents();
     if (cams.length) selId = cams[0].id;
@@ -147,7 +169,15 @@ function trackAt(K, t) {
   return [K.x[lo] + (K.x[lo + 1] - K.x[lo]) * k, K.z[lo] + (K.z[lo + 1] - K.z[lo]) * k, K.y[lo], K.a[lo] + da * k];
 }
 // (l'origine d'un parent — le (0, 0, 0) d'une caméra qui lui est attachée — : la tête d'un personnage, le centre d'un véhicule)
+// (frame : ce repère corrigé de ce que le projet anime — un personnage déplacé par des clés : anim.js ; frameRaw : ce que dit le record)
 function frame(parent, t) {
+  if (parent.kind === 'objet') return anim?.objFrame(parent.id, t) || null;   // (un élément ajouté : objet, lumière, groupe…)
+  const f0 = frameRaw(parent, t), f = f0 && anim ? anim.fixFrame(parent, t, f0, ORIGIN_Y[parent.kind] || 0) : f0;
+  // (les yeux d'un personnage — vue subjective d'une caméra « pov » — : calculés seulement si on les demande)
+  if (f && parent.kind === 'perso') Object.defineProperty(f, 'eye', { configurable: true, enumerable: false, get: () => { const e = geoKit.eye(parent.id, t); return e ? { ...e, x: e.x + f.x - f0.x, y: e.y + f.y - f0.y, z: e.z + f.z - f0.z } : null; } });
+  return f;
+}
+function frameRaw(parent, t) {
   if (!rec || !world) return null;
   if (parent.kind === 'perso') {
     const q = pb?.where(t, parent.id); if (!q) return null;
@@ -162,7 +192,7 @@ function frame(parent, t) {
 const wpose = (c, t = T) => worldPose(c, t, cams, frame);
 /** Où est un personnage ou un véhicule à l'instant t : { x, y (le sol sous lui), z, yaw (son cap, convention des caméras) } */
 function entPos(kind, id, t) { const f = frame({ kind, id }, t); return f ? { x: f.x, y: f.y - ORIGIN_Y[kind], z: f.z, yaw: f.yaw } : null; }
-async function loadAccount() { try { account = (await api.account?.()) || null; } catch { account = null; } ai?.render(); scene?.render(); return account; }
+async function loadAccount() { try { account = (await api.account?.()) || null; } catch { account = null; } ai?.render(); scene?.render(); if (pb) renderProps(); return account; }
 function refreshUi() { if (!pb) return; if (!cams.some(c => c.id === selId)) { selId = scene?.sel ? null : cams[0]?.id || null; selCh = null; selT = null; if (mode === 'cam' && !selId) setMode('free'); } fillParents(); renderTracks(); renderProps(); scene?.render(); }
 // Ce que voient le panneau « Scène » (scene.js) et l'assistant (ai.js) de cette page
 const sceneHost = {
@@ -170,8 +200,21 @@ const sceneHost = {
   setMode: m => setMode(m), selectCam: id => selectCam(id), selCam: () => selCam(), showCam: (id, force = false) => { const c = cams.find(x => x.id === id); if (c) showCam(c, force); },
   touch: () => touch(), hint: (t, ms) => hint(t, ms), toast: (t, e) => toast(t, e), account: () => account, shared: () => SH, entPos,
   selCamLast: () => cams.find(c => c.id === lastCamId) || null,
+  // (pour anim.js : la position du record sans les surcharges, la frise, la sélection de clé des caméras)
+  rawPos(kind, id, t) { const f = frameRaw({ kind, id }, t); return f ? { x: f.x, y: f.y - ORIGIN_Y[kind], z: f.z, yaw: f.yaw } : null; },
+  api, get xpHost() { return xpHost; }, get rate() { return rate; }, refreshUi: () => refreshUi(),
+  get scene() { return scene; }, get playing() { return playing; }, get selT() { return selT; }, get selCh() { return selCh; }, seek: t => { if (mode === 'cine') stopCine(); seek(t); },
+  renderTracks: () => renderTracks(), renderProps: () => renderProps(), scrub: (e, lane) => scrub(e, lane), entExtra: e => anim?.entExtra(e) || [],
   setParentOf(c, e) { const kind = e.kind === 'vehicule' ? 'vehicule' : 'perso'; rebase(c, () => { c.parent = { kind, id: e.id, name: e.name }; if (kind === 'vehicule') c.follow = true; }); selectCam(c.id); touch(); hint(`${c.name} suit maintenant ${e.name}.`, 3000); },
 };
+// (géométrie et connaissance du lieu pour l'assistant : ai-tools-geo.js ; AI_EXT : les extensions du moteur d'actions — chaque module
+// qui ajoute des outils à l'assistant y pousse la sienne, cf. l'en-tête d'ai-tools.js)
+const geoKit = createGeoKit({ world: () => world, pb: () => pb, rec: () => rec, shared: () => SH, entities: () => scene?.list || [], posAt: (k, t) => scene.posOf(k, t), T: () => T, cam: () => cam,
+  points: () => cams.flatMap(c => keyTimes(c, ['x']).slice(0, 40).map(t => wpose(c, t)).filter(Boolean)) });
+const AI_EXT = [createGeoExt(), createMondeExt(), createAnimExt()];   // (createMondeExt : monde et export — ai-tools-monde.js)
+// (raytracing : jusqu'à 100 pour tous, jusqu'à 300 pour un compte VIP — le plafond est appliqué ici, à l'affichage)
+const rtCap = () => (account?.vip || account?.admin ? CAMS.RT_MAX : 1);
+const fxOf = (c, t) => { const F = fxAt(c, t); if (F.rt > rtCap()) F.rt = rtCap(); return F; };
 const EV_NAMES = { chat: 'parole', act: 'geste', emote: 'émote', ragdoll: 'chute', shot: 'tir', stab: 'coup de couteau', kthrow: 'lancer de couteau', carry: 'porté', door: 'porte', alarm: 'alarme' };
 let refreshTimer = 0;
 /** L'« hôte » du moteur d'actions de l'assistant (ai-tools.js) : tout ce qu'il peut lire et faire dans le Studio */
@@ -179,15 +222,20 @@ const aiHost = () => ({
   C: CAMS, get cams() { return cams; }, set cams(v) { cams = v; }, get T() { return T; }, dur: rec.dur, frame,
   info: () => ({ lieu: cur.roomName || cur.room || world.room?.id || 'lieu inconnu', interieur: !world.room?.outdoor, heure: +(world.gameHourNow?.() ?? 12).toFixed(1), nuit: (world.night || 0) > 0.5,
     joueur: (e => (e ? { id: e.id, nom: e.name } : null))(scene.list.find(e => e.me)), compte: account ? { pseudo: account.name, admin: account.admin } : null }),
-  entities: () => scene.list, find: q => scene.find(q), posAt: (key, t) => scene.posOf(key, t), isHidden: k => scene.isHidden(k), lookOf: (id, t) => scene.lookOf(id, t), lookOptions: (id, attr) => scene.lookOptions(id, attr),
+  // (les éléments ajoutés — objets, lumières, textes… : anim.js — sont aussi des sujets pour l'assistant : clé « o:<id> », type « objet »)
+  entities: () => [...scene.list, ...(anim?.subjects() || [])], find: q => scene.find(q) || (anim?.subjects() || []).find(e => e.key === q || e.id === q || e.name.toLowerCase() === String(q).toLowerCase()) || null,
+  posAt: (key, t) => (String(key).startsWith('o:') ? anim?.subjectPos(key, t) || null : scene.posOf(key, t)), isHidden: k => scene.isHidden(k), lookOf: (id, t) => scene.lookOf(id, t), lookOptions: (id, attr) => scene.lookOptions(id, attr),
   blocked: (x, z) => !!world.room && !world.room.outdoor && !world.isFloor(Math.round(x), Math.round(z)),
+  ext: AI_EXT, geo: geoKit, rtMax: () => rtCap() * 100,
   aspect: () => ($('#view').clientWidth || 16) / ($('#view').clientHeight || 9),
   stateOf(id, t) { const u = scene.descAt(id, t); return u ? { etat: { stand: 'debout', sit: 'assis', lie: 'allongé', swim: 'nage' }[u.st] || u.st, ...(u.em ? { emote: u.em } : {}), ...(u.title ? { titre: u.title } : {}), ...(u.pv ? { dans_le_vehicule: u.pv[0] } : {}), ...(u.ko ? { ko: true } : {}), ...(u.dance ? { danse: true } : {}) } : null; },
   events: (t0, t1) => rec.events.filter(([t, m]) => t >= t0 && t <= t1 && EV_NAMES[m.t]).map(([t, m]) => ({ t, id: m.id, type: EV_NAMES[m.t], name: scene.byKey(`u:${m.id}`)?.name || '', text: m.text || m.a || m.e || '' })),
   seek: t => { if (mode === 'cine') stopCine(); seek(t); }, setRate: r => setRate(r), play: on => setPlaying(on),
   view: (m, id) => { if (m === 'cam') { selectCam(id); setMode('cam'); } else setMode(m); },
   setLook: (id, patch) => scene.setLook(id, patch), resetLook: id => scene.resetLook(id), setHidden: (k, on) => scene.setHidden(k, on),
-  preview: () => startCine(), exportVideo: () => { if (!cineRange(cams) || exporting) return false; exportVideo(); return true; },
+  preview: () => startCine(), exportVideo: () => (exporting || !xp || !cineRange(cams) ? false : xp.open()),   // (l'IA : seulement s'il y a une cinématique ; la page s'ouvre, rien ne démarre)
+  monde: () => monde, xport: () => xp,   // (monde : world.js ; xport : export.js — outils de ai-tools-monde.js)
+  anim: anim?.api || null, account: () => account, shared: () => SH, viewCam: cam,   // (éléments animés : anim.js — outils de ai-tools-anim.js)
   changed: () => { touch(); clearTimeout(refreshTimer); refreshTimer = setTimeout(refreshUi, 120); },
 });
 /** Ce à quoi une caméra peut s'attacher : [{ kind, id, name }] — les personnages par leur nom, les véhicules, les autres caméras */
@@ -196,6 +244,7 @@ function parentChoices(forCam = null) {
   for (const [id, K] of rec.users) { const name = K.desc[0]?.[1]?.name; if (!name) continue; const n = seen.has(name.toLowerCase()) ? `${name} #${id}` : name; seen.add(name.toLowerCase()); out.push({ kind: 'perso', id, name: n }); }
   for (const [id, K] of rec.vehs) out.push({ kind: 'vehicule', id, name: `Véhicule ${K.desc[0]?.[1]?.model || ''} #${id}`.replace(/\s+/g, ' ') });
   for (const c of cams) if (c !== forCam) out.push({ kind: 'camera', id: c.id, name: c.name });
+  for (const o of anim?.parents() || []) out.push({ kind: 'objet', id: o.id, name: o.name });   // (éléments ajoutés : anim.js)
   return out;
 }
 function fillParents() { const L = $('#parentList'); L.replaceChildren(); if (!rec) return; for (const p of parentChoices(selCam())) L.append(el('option', { value: p.name })); }
@@ -220,17 +269,17 @@ function setParent(c, text) {
 
 // ---------------------------------------------------------------- Caméras et images-clés
 function touch() { clearTimeout(saveTimer); saveTimer = setTimeout(() => saveProject(true), 1500); clearTimeout(hist.timer); hist.timer = setTimeout(histCommit, 350); }
-const hasProject = () => cams.length > 0 || ents.hidden.length > 0 || Object.keys(ents.over).length > 0;
+const hasProject = () => cams.length > 0 || ents.hidden.length > 0 || Object.keys(ents.over).length > 0 || [...extras.values()].some(x => x.has());
 async function saveProject(quiet = false) {
   clearTimeout(saveTimer); if (!cur) return;
   if (!hasProject() && !cur.project) return;
-  const r = await api.saveProject(cur.name, packProject(cur.name, rate, cams, ents)).catch(() => null);
+  const r = await api.saveProject(cur.name, packAll()).catch(() => null);
   if (r?.ok) { cur.project = true; if (!quiet) toast('💾 Projet enregistré à côté du record.'); } else if (!quiet) toast('Enregistrement du projet impossible.', true);
 }
 // ---- Historique (Ctrl+Z / Ctrl+Y) : des instantanés du projet — caméras, clés, apparences, entités masquées. Chaque geste terminé
 // (touch) en dépose un ; l'assistant IA s'en sert aussi pour ses points de restauration.
 const hist = { list: [], i: -1, timer: 0 };
-const snapshot = () => JSON.stringify({ rate, cams, ents });
+const snapshot = () => JSON.stringify({ rate, cams, ents, ...extrasSave() });
 function histReset() { clearTimeout(hist.timer); hist.timer = 0; hist.list = [snapshot()]; hist.i = 0; }
 function histCommit() {
   clearTimeout(hist.timer); hist.timer = 0; if (!pb) return;
@@ -240,7 +289,7 @@ function histCommit() {
 /** Remet le projet dans l'état d'un instantané (annulation, point de restauration de l'IA) */
 function restore(json) {
   if (modal) modalEnd(false);
-  const pj = loadProject({ v: 4, ...JSON.parse(json) }); cams = pj.cams; ents = pj.ents; setRate(pj.rate);
+  const raw = JSON.parse(json), pj = loadProject({ v: 4, ...raw }); cams = pj.cams; ents = pj.ents; setRate(pj.rate); extrasLoad(raw);
   if (!cams.some(c => c.id === selId)) { selId = cams[0]?.id || null; selCh = null; selT = null; if (mode === 'cam') setMode('free'); }
   else if (selT != null && !hasKey(selCam(), selCh, selT)) { selT = null; selCh = null; }
   scene?.applyEnts(true); fillParents(); renderTracks(); renderProps(); scene?.render();
@@ -296,7 +345,7 @@ function setWorld(c, patch, force = false) {
 }
 /** K : image-clé de la caméra sélectionnée à l'instant courant, sur tous les paramètres de pose, d'après la vue */
 function addKey() {
-  if (!pb) return; const c = selCam(); if (!c) return addCam();
+  if (!pb) return; const c = selCam(); if (!c && anim?.keyPose()) return; if (!c) return addCam();
   const pose = mode === 'free' || mode === 'pov' ? { ...cam } : (wpose(c) || { ...cam });
   setWorld(c, pose, true); selCh = null; selT = c.tracks.x[keyAt(c.tracks.x, T)]?.t ?? Math.round(T); renderTracks(); renderProps(); touch();
   hint(`Clé posée sur ${c.name} à ${fmt(T)}.`, 2500);
@@ -373,9 +422,11 @@ function renderTracks() {
       wrap.append(sh, laneOf(c, ch, dur));
     }
   }
+  for (const x of extras.values()) x.renderTrack?.(wrap, dur);   // (pistes des modules : 🌍 Monde…)
   host.replaceChildren(wrap); wrap.scrollTop = keepScroll;
-  $('#preview').disabled = $('#export').disabled = !cineRange(cams) && !exporting && mode !== 'cine';
+  $('#preview').disabled = !cineRange(cams) && !exporting && mode !== 'cine'; $('#export').disabled = !!exporting;
   for (const id of ['#addKey', '#gMove', '#gRot', '#camView']) $(id).disabled = !selCam();
+  if (!selCam() && anim?.target) { for (const id of ['#addKey', '#gMove', '#gRot']) $(id).disabled = false; }   // (un élément animé sélectionné : mêmes boutons)
   $('#camView').classList.toggle('on', mode === 'cam'); $('#gMove').classList.toggle('on', giz?.mode === 'translate' && !!selCam()); $('#gRot').classList.toggle('on', giz?.mode === 'rotate' && !!selCam());
 }
 function scrub(e, box0) {
@@ -409,6 +460,7 @@ function dragKey(e, c, ch, t) {
 // ---------------------------------------------------------------- Panneau de propriétés
 const FIELDS = { pX: ['x', 1, 2], pY: ['y', 1, 2], pZ: ['z', 1, 2], pYaw: ['yaw', 180 / Math.PI, 1], pPitch: ['pitch', 180 / Math.PI, 1], pRoll: ['roll', 180 / Math.PI, 1], pFov: ['fov', 1, 1] };
 const SLIDERS = { vignette: 'pVignette', grain: 'pGrain', dof: 'pDof', rt: 'pRt' };
+const RT_SLIDERS = { rtAo: 'pRtAo', rtRad: 'pRtRad', rtBloom: 'pRtBloom', rtRefl: 'pRtRefl' };   // (réglages fins du raytracing : fixes par caméra)
 const pct = (v, ch) => (ch === 'rt' ? String(Math.round(v * 100)) : v > 0.004 ? `${Math.round(v * 100)} %` : 'non');
 function renderProps() {
   const c = selCam(), box = $('#props'); box.hidden = !c || !pb; if (!c || !pb) return;
@@ -416,8 +468,12 @@ function renderProps() {
   if (A !== $('#pName')) $('#pName').value = c.name;
   $('#pDot').style.background = c.color; $('#pColor').value = c.color; $('#pShadow').checked = !!c.shadow;
   if (A !== $('#pParent')) $('#pParent').value = c.parent?.name || '';
-  const info = $('#pParentInfo'); info.className = 'p-parent'; info.replaceChildren(...(c.parent ? ['Parent : ', el('b', { text: c.parent.name }), ` (${{ perso: 'personnage', vehicule: 'véhicule', camera: 'caméra' }[c.parent.kind]})`] : [el('span', { class: 'muted', text: 'Aucun parent : la caméra est libre dans la scène.' })]));
+  const info = $('#pParentInfo'); info.className = 'p-parent'; info.replaceChildren(...(c.parent ? ['Parent : ', el('b', { text: c.parent.name }), ` (${{ perso: 'personnage', vehicule: 'véhicule', camera: 'caméra', objet: 'élément ajouté' }[c.parent.kind]})`] : [el('span', { class: 'muted', text: 'Aucun parent : la caméra est libre dans la scène.' })]));
   $('#pFollow').checked = c.follow; $('#pLook').checked = c.look; $('#pFollow').disabled = $('#pLook').disabled = !c.parent;
+  $('#pPov').checked = !!c.pov; $('#pPov').disabled = c.parent?.kind !== 'perso';
+  // (raytracing : le curseur va à 100, ou à 300 pour un compte VIP ; réglages fins : valeurs fixes de la caméra)
+  $('#pRt').max = String(rtCap()); $('#pRtNote').textContent = rtCap() > 1 ? 'VIP : raytracing jusqu’à 300.' : 'Jusqu’à 300 avec le VIP.';
+  for (const [k, id] of Object.entries(RT_SLIDERS)) { const f = document.getElementById(id), v = String(c[k] ?? 1); if (A !== f && f.value !== v) f.value = v; document.getElementById(id + 'V').textContent = `${Math.round((c[k] ?? 1) * 100)} %`; }
   $('#pFilter').value = c.filter;
   const has = selT != null && hasKey(c, selCh, selT);
   if (A !== $('#pT')) $('#pT').value = has ? (selT / 1000).toFixed(2) : ''; $('#pT').disabled = $('#pEase').disabled = $('#pKeyDel').disabled = !has; $('#pT').max = String(rec.dur / 1000);
@@ -442,11 +498,11 @@ function propsLive(force = false) {
   const rel = c.parent ? `relatif à ${c.parent.name}` : 'monde'; if ($('#pRel').textContent !== rel) { $('#pRel').textContent = rel; $('#pRel').classList.toggle('rel', !!c.parent); }
   const yl = relYaw(c) ? 'Lacet ° (relatif)' : 'Lacet °'; if ($('#pYawL').firstChild.textContent !== yl) $('#pYawL').firstChild.textContent = yl;
   const all = allKeyed(c, T); if ($('#pKeyAll').classList.contains('on') !== all) { $('#pKeyAll').classList.toggle('on', all); $('#pKeyAll').textContent = all ? '◆ Retirer les clés de cet instant' : '◆ Clé sur tous les paramètres'; }
-  for (const b of document.querySelectorAll('#props .kd')) { const on = keyAt(c.tracks[b.dataset.ch], T) >= 0, anim = c.tracks[b.dataset.ch].length > 1; if (b.classList.contains('on') !== on) b.classList.toggle('on', on); if (b.classList.contains('anim') !== anim) b.classList.toggle('anim', anim); }
-  for (const b of document.querySelectorAll('#trackRows .kd')) { const [id, ch] = b.dataset.kd.split('|'), o = cams.find(x => x.id === id), on = !!o && keyAt(o.tracks[ch], T) >= 0; if (b.classList.contains('on') !== on) b.classList.toggle('on', on); }
+  for (const b of document.querySelectorAll('#props .kd[data-ch]')) { const on = keyAt(c.tracks[b.dataset.ch], T) >= 0, anim = c.tracks[b.dataset.ch].length > 1; if (b.classList.contains('on') !== on) b.classList.toggle('on', on); if (b.classList.contains('anim') !== anim) b.classList.toggle('anim', anim); }
+  for (const b of document.querySelectorAll('#trackRows .kd[data-kd]')) { const [id, ch] = b.dataset.kd.split('|'), o = cams.find(x => x.id === id), on = !!o && keyAt(o.tracks[ch], T) >= 0; if (b.classList.contains('on') !== on) b.classList.toggle('on', on); }
   const n = keyTimes(c).length, txt = !n ? 'aucune clé' : hasKey(c, null, T) ? `clé à ${fmt(T)}` : fmt(T);
   if ($('#pWhen').textContent !== txt) $('#pWhen').textContent = txt;
-  const note = w?.lost ? `⚠ ${c.parent.name} n’est pas là à cet instant.` : c.parent ? `Coordonnées relatives à ${c.parent.name} : 0 / 0 / 0 = dans ${c.parent.kind === 'perso' ? 'sa tête' : c.parent.kind === 'vehicule' ? 'le véhicule' : 'cette caméra'}${c.follow ? ' (X : devant lui, Z : à sa droite)' : ''}.` : 'Coordonnées du monde. Modifier une valeur animée pose une clé sur sa ligne ; ◆ : poser ou retirer la clé de cet instant.';
+  const note = w?.lost ? `⚠ ${c.parent.name} n’est pas là à cet instant.` : c.parent ? `Coordonnées relatives à ${c.parent.name} : 0 / 0 / 0 = dans ${c.parent.kind === 'perso' ? 'sa tête' : c.parent.kind === 'vehicule' ? 'le véhicule' : c.parent.kind === 'objet' ? 'cet élément' : 'cette caméra'}${c.follow ? ' (X : devant lui, Z : à sa droite)' : ''}.` : 'Coordonnées du monde. Modifier une valeur animée pose une clé sur sa ligne ; ◆ : poser ou retirer la clé de cet instant.';
   if ($('#pNote').textContent !== note) $('#pNote').textContent = note;
 }
 function dupCam(c) { const d = newCam(cams); Object.assign(d, JSON.parse(JSON.stringify({ ...c, id: d.id, name: d.name, color: d.color }))); cams.push(d); selectCam(d.id); touch(); return d; }
@@ -471,7 +527,9 @@ function bindProps() {
   $('#pKey').onclick = addKey; $('#pKeyDel').onclick = delKey;
   $('#pParent').onchange = () => { const c = selCam(); if (c) setParent(c, $('#pParent').value); };
   $('#pFollow').onchange = C(c => { rebase(c, () => { c.follow = $('#pFollow').checked; }); renderProps(); });
-  $('#pLook').onchange = C(c => { c.look = $('#pLook').checked; renderProps(); });
+  $('#pLook').onchange = C(c => { c.look = $('#pLook').checked; if (c.look) c.pov = false; renderProps(); });
+  $('#pPov').onchange = C(c => { c.pov = $('#pPov').checked && c.parent?.kind === 'perso'; if (c.pov) { c.look = false; hint('Vue subjective : la caméra est aux yeux du personnage et regarde où il regardait ; ses angles s’ajoutent à son regard.', 5000); } renderProps(); });
+  for (const [k, id] of Object.entries(RT_SLIDERS)) document.getElementById(id).oninput = C(c => { c[k] = clamp(+document.getElementById(id).value, 0, 2); document.getElementById(id + 'V').textContent = `${Math.round(c[k] * 100)} %`; });
   $('#pFilter').onchange = C(c => { c.filter = $('#pFilter').value; if (c.filter && mode === 'free') hint('Le filtre se voit à travers la caméra : « 🎥 Vue caméra » (0).', 4000); });
   for (const [k, id] of Object.entries(SLIDERS)) document.getElementById(id).oninput = C(c => { setParam(c, k, +document.getElementById(id).value); });
   $('#pView').onclick = () => setMode(mode === 'cam' ? 'free' : 'cam');
@@ -547,6 +605,12 @@ function startCine(done = null) {
 function stopCine() { if (mode === 'cine') setMode('free'); }
 // Vue du joueur enregistré : la caméra à ses yeux, tournée comme il regardait
 function povRestore() { if (povHead) { povHead.scale.setScalar(1); povHead = null; } $('#povBtn').classList.remove('on'); if (mode === 'pov') mode = 'free'; }
+/** La tête d'un personnage masquée pendant qu'une caméra subjective (« pov ») regarde par ses yeux ; null : plus personne */
+function povCam(id) {
+  const head = id == null ? null : world.avatars.get(id)?.rig?.bones?.tete || null;
+  if (head !== povHead) { if (povHead) povHead.scale.setScalar(1); povHead = head; }
+  if (povHead) povHead.scale.setScalar(0.001);
+}
 function povApply() {
   const q = pb.where(T); if (!q) return;
   const L = pb.lookAt(T), yaw = L ? L.yaw : Math.atan2(Math.cos(q[3]), Math.sin(q[3])), pitch = L ? L.pitch : -0.05;
@@ -566,24 +630,19 @@ function behindPlayer(t) {
 function goPlayer() { if (!pb) return; setMode('free'); behindPlayer(T); }
 
 // ---------------------------------------------------------------- Export vidéo
-async function exportVideo() {
-  if (exporting) { stopCine(); return; }
-  if (!cineRange(cams)) return toast('Il faut au moins deux images-clés sur les caméras actives pour faire une cinématique.', true);
-  const mime = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(m => window.MediaRecorder?.isTypeSupported(m));
-  if (!mime) return toast('L’export vidéo n’est pas disponible sur cet ordinateur.', true);
-  const st = await api.exportStart(cur.name).catch(() => null); if (!st?.ok) return toast('Impossible de créer le fichier vidéo.', true);
-  const stream = $('#view').captureStream(60), mr = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 24e6 });
-  let chain = Promise.resolve();
-  mr.ondataavailable = e => { if (e.data.size) chain = chain.then(async () => api.exportChunk(new Uint8Array(await e.data.arrayBuffer()))); };
-  mr.onstop = async () => {
-    await chain; stream.getTracks().forEach(t => t.stop());
-    const r = await api.exportEnd().catch(() => null); exporting = null; $('#recDot').hidden = true; $('#export').textContent = '⏺ Exporter'; $('#export').classList.remove('on');
-    toast(r?.ok ? `🎬 Vidéo exportée : ${r.file}` : 'Export interrompu.', !r?.ok); renderTracks();
-  };
-  exporting = mr; $('#recDot').hidden = false; $('#export').textContent = '⏹ Arrêter l’export'; $('#export').classList.add('on');
-  if (!startCine(() => { setTimeout(() => { if (mr.state !== 'inactive') mr.stop(); }, 250); })) { exporting = null; return; }
-  mr.start(1000);
-}
+// (la page « Exporter » : export.js — format, compression, nom, début et fin ; rendu image par image, par draw() ci-dessous)
+function exportVideo() { if (!pb || exporting) return; setPlaying(false); xp?.open(); }
+const xpHost = {
+  $, el, api, toast, hint, get world() { return world; }, get rec() { return rec; }, get cur() { return cur; }, get T() { return T; }, get rate() { return rate; }, get clock() { return clock; },
+  keyTimes: allKeyTimes, bars: () => $('#bars').checked,
+  overlay: (g, w, h, t) => anim?.paint(g, w, h, t),   // (fondus et titres peints sur chaque image exportée : anim.js)
+  times: (a, b, step) => anim?.frameTimes(a, b, step) || null,   // (instants des images quand le temps est ralenti ou figé)
+  audio: (a, b) => anim?.encodeAudio(a, b),   // (le son de la frise, encodé en Opus — export WebM)
+  begin() { setPlaying(false); if (modal) modalEnd(false); if (document.pointerLockElement) document.exitPointerLock(); exporting = { frames: true }; frameHold = true; setMode('cine'); $('#recDot').hidden = false; },
+  /** Une image de la cinématique à l'instant t, calculée tout de suite (jump : saut dans le temps) */
+  frame(t, jump = false) { T = clamp(t, 0, rec.dur); if (jump) seekNext = true; if (mode !== 'cine') setMode('cine'); draw(); },
+  end() { frameHold = false; exporting = null; $('#recDot').hidden = true; setMode('free'); renderTracks(); },
+};
 
 // ---------------------------------------------------------------- Caméra libre
 const MOVE = { KeyW: [1, 0, 0], KeyS: [-1, 0, 0], KeyD: [0, 1, 0], KeyA: [0, -1, 0], Space: [0, 0, 1], KeyC: [0, 0, -1] };   // (Ctrl ne descend plus : il sert à Ctrl+Z / Ctrl+Y)
@@ -609,7 +668,7 @@ function syncSettings() {
 
 // La mise au point du flou de profondeur : le parent de la caméra ; sinon le personnage le plus proche de l'axe du regard ; sinon 12 m
 function focusOf(w) {
-  if (w.P) return Math.max(0.4, Math.hypot(w.P.x - w.x, w.P.y - w.y, w.P.z - w.z));
+  if (w.P && !w.pov) return Math.max(0.4, Math.hypot(w.P.x - w.x, w.P.y - w.y, w.P.z - w.z));
   const cp = Math.cos(w.pitch), f = [Math.cos(w.yaw) * cp, Math.sin(w.pitch), Math.sin(w.yaw) * cp]; let best = 12, score = 0.955;   // (à moins de 17° de l'axe)
   for (const a of world.avatars.values()) { if (!a.group.visible) continue; const p = a.group.position, d = [p.x - w.x, p.y + 1.4 - w.y, p.z - w.z], L = Math.hypot(...d); if (L < 0.3 || L > 60) continue; const k = (d[0] * f[0] + d[1] * f[1] + d[2] * f[2]) / L; if (k > score) { score = k; best = L; } }
   return best;
@@ -619,20 +678,28 @@ function focusOf(w) {
 let last = realNow();
 function loop() {
   requestAnimationFrame(loop);
+  if (!frameHold) draw();   // (pendant un export, c'est l'export qui appelle draw() pour chaque image — cf. xpHost)
+}
+/** Calcule et affiche une image (la boucle, ou l'export image par image) */
+function draw() {
   const now = realNow(), dt = Math.min(0.25, (now - last) / 1000); last = now;
   if (!pb || !world) return;
+  monde?.tick();
   if (playing) {
-    T += dt * 1000 * rate;
+    T = anim ? anim.advance(T, dt * 1000 * rate) : T + dt * 1000 * rate;   // (ralenti, accéléré, images figées : anim.js)
     const end = mode === 'cine' ? (cineRange(cams)?.[1] ?? rec.dur) : rec.dur;
-    if (T >= end) { T = end; setPlaying(false); if (mode === 'cine') { const a = activeCam(cams, T), w = a && wpose(a); if (w) for (const c of CH) cam[c] = w[c]; stopCine(); } }
+    const back = mode !== 'cine' && !exporting ? anim?.loopAt(T, end) : null;   // (boucle de lecture — 🔁 de la frise : anim.js)
+    if (back != null) { T = back; seekNext = true; }
+    else if (T >= end) { T = end; setPlaying(false); if (mode === 'cine') { const a = activeCam(cams, T), w = a && wpose(a); if (w) for (const c of CH) cam[c] = w[c]; stopCine(); } }
   }
   moveCamera(dt);
   // La vue : libre, à travers une caméra (avec son filtre), ou celle de la cinématique (les caméras actives s'enchaînent)
   let shot = null;
   if (mode === 'cine') shot = activeCam(cams, T); else if (mode === 'cam') shot = selCam(); else if (mode === 'pov') povApply();
   const w = shot && wpose(shot);
+  if (mode !== 'pov') { const pv = w?.pov ? shot : mode === 'free' && selCam()?.pov ? selCam() : null; povCam(pv ? pv.parent.id : null); }   // (caméra subjective à l'image ou dans l'aperçu : la tête de son personnage est masquée)
   if (w) for (const c of CH) cam[c] = w[c]; else if (mode === 'cam') setMode('free');
-  if (w) { fx.use(fxAt(shot, T), focusOf(w)); world.post = fx.active ? fx : null; } else if (world.post) world.post = null;
+  if (w) { fx.use(fxOf(shot, T), focusOf(w)); world.post = fx.active ? fx : null; } else if (world.post) world.post = null;
   pb.eye = { x: cam.x, z: cam.z, r: view.dist + 10 };
   try {
     pb.step(T, seekNext); seekNext = false;
@@ -640,16 +707,17 @@ function loop() {
     const aspect = (cv.clientWidth || 16) / (cv.clientHeight || 9);
     giz.sync(cams.map(c => { const p = show ? wpose(c) : null; return { id: c.id, name: c.name, color: c.color, parentName: c.parent?.name || '', pose: p, lost: !!p?.lost }; }), selId, show, aspect);
     scene?.tick(now);
+    anim?.tick(now, show);   // (éléments animés : après la relecture, avant le dessin)
     world.frame();
     // (l'aperçu incrusté : ce que voit la caméra sélectionnée à cet instant — pas quand on regarde déjà à travers une caméra)
     const pc = show ? selCam() : null, pw = pc && wpose(pc), box = $('#pip');
-    if (pw && pip) { if (box.hidden) { box.hidden = false; $('#stage').classList.add('has-pip'); } if (pip.draw(pw, fxAt(pc, T), focusOf(pw), aspect, now, playing ? 140 : 260)) { const nm = `🎥 ${pc.name} · ${fmt(T)}`; if ($('#pipName').textContent !== nm) $('#pipName').textContent = nm; $('#stage').style.setProperty('--pip-h', `${$('#pip').offsetHeight}px`); } }
+    if (pw && pip) { if (box.hidden) { box.hidden = false; $('#stage').classList.add('has-pip'); } if (pip.draw(pw, fxOf(pc, T), focusOf(pw), aspect, now, playing ? 140 : 260)) { const nm = `🎥 ${pc.name} · ${fmt(T)}`; if ($('#pipName').textContent !== nm) $('#pipName').textContent = nm; $('#stage').style.setProperty('--pip-h', `${$('#pip').offsetHeight}px`); } }
     else if (!box.hidden) { box.hidden = true; $('#stage').classList.remove('has-pip'); }
   } catch (e) { if (!loop.err) { loop.err = true; console.error(e); toast('Erreur d’affichage : ' + (e.message || e), true); } }
   loop.n = (loop.n || 0) + 1;
   $('#time').textContent = `${fmt(T)} / ${fmt(rec.dur)}`;
   const k = `${T / Math.max(1, rec.dur) * 100}%`; $('#tlFill').style.width = k; $('#tlHead').style.left = k; $('#tracks').style.setProperty('--head', k);
-  propsLive();
+  propsLive(); monde?.live(now);
 }
 
 // ---------------------------------------------------------------- Commandes
@@ -668,8 +736,8 @@ function bind() {
   $('#povBtn').onclick = () => { if (pb) setMode(mode === 'pov' ? 'free' : 'pov'); };
   $('#tagsBtn').onclick = () => $('#tagsBtn').classList.toggle('on', !$('#overlay').classList.toggle('hide-tags'));
   $('#tagsBtn').classList.add('on');
-  $('#setBtn').onclick = () => { $('#help').hidden = true; $('#settings').hidden = !$('#settings').hidden; };
-  $('#helpBtn').onclick = () => { $('#settings').hidden = true; $('#help').hidden = !$('#help').hidden; };
+  $('#setBtn').onclick = () => { $('#help').hidden = true; monde?.toggle(false); $('#settings').hidden = !$('#settings').hidden; };
+  $('#helpBtn').onclick = () => { $('#settings').hidden = true; monde?.toggle(false); $('#help').hidden = !$('#help').hidden; };
   $('#spd').oninput = e => { speed = +e.target.value; syncSettings(); keepView(); };
   $('#fov').oninput = e => { cam.fov = +e.target.value; syncSettings(); };
   $('#roll').oninput = e => { cam.roll = rad(+e.target.value); syncSettings(); };
@@ -684,6 +752,11 @@ function bind() {
   scene = createScene(sceneHost);
   ai = createAI({ $, el, api, account: () => account, ready: () => !!pb, host: aiHost, snapshot, restore, flush: histCommit, refresh: refreshUi, toast, reloadAccount: loadAccount });
   ai.render(); loadAccount();
+  // (le monde — heure, brume — et la page « Exporter »)
+  monde = createMonde({ $, el, get world() { return world; }, get T() { return T; }, get rec() { return rec; }, touch: () => touch(), seek: t => { if (mode === 'cine') stopCine(); seek(t); }, hint: (t, ms) => hint(t, ms), renderTracks: () => renderTracks(), fmt });
+  extras.set('monde', monde);
+  anim = createAnim(sceneHost); extras.set('anim', anim);
+  xp = createExport(xpHost);
   $('#pip').onclick = () => { if (selCam()) setMode('cam'); };
   $('#timeline').addEventListener('pointerdown', e => scrub(e, $('#timeline')));
   // Souris : clic sur une caméra = la sélectionner ; ailleurs = prendre la caméra libre ; clic droit maintenu = tourner ; molette = vitesse
@@ -696,7 +769,9 @@ function bind() {
     if (e.button !== 0 || exporting) return;
     // (pointeur déjà pris par la caméra libre : sa position est figée — ni poignée ni sélection, on reste en vol)
     if (document.pointerLockElement === cv) return;
-    if (mode === 'free' || mode === 'pov') { if (giz?.hover) return; const id = giz?.pick(e.clientX, e.clientY); if (id) { selectCam(id); return; } const en = scene?.pick(e.clientX, e.clientY); if (en) { scene.select(en); return; } }
+    if (mode === 'free' || mode === 'pov') { if (giz?.hover) return; const id = giz?.pick(e.clientX, e.clientY); if (id) { selectCam(id); return; }
+      const ob = anim?.pick(e.clientX, e.clientY); if (ob) { anim.select(ob); return; }   // (un élément ajouté : objet, lumière, miroir…)
+      const en = scene?.pick(e.clientX, e.clientY) || anim?.pickItem(e.clientX, e.clientY, e.altKey); if (en) { scene.select(en); return; } }
     cv.requestPointerLock?.();
   }, true);
   cv.addEventListener('pointerup', e => { if (e.button === 2) rdrag = false; });
@@ -708,8 +783,10 @@ function bind() {
   let accAt = Date.now(); addEventListener('focus', () => { if (Date.now() - accAt > 60000) { accAt = Date.now(); loadAccount(); } });
   addEventListener('keydown', e => {
     if (e.target.matches?.('input, select, textarea')) return;
+    if (xp?.visible || frameHold) return;   // (page « Exporter » ouverte, ou export en cours : les raccourcis du Studio dorment)
     if (e.code === 'Tab') { e.preventDefault(); $('#app').classList.toggle('no-side'); return; }
     if (!pb) return;
+    if (!modal && !exporting && anim?.onKey(e, document.pointerLockElement === cv)) { e.preventDefault(); return; }   // (éléments animés : K, R / L / T, Suppr, Ctrl+C / V / D)
     // (annuler / rétablir : d'après la lettre tapée — en AZERTY, « Z » est la touche d'avancée « W » des claviers QWERTY —, avant les déplacements)
     if ((e.ctrlKey || e.metaKey) && !e.altKey) { const k = e.key.toLowerCase(); if (k === 'z' || k === 'y') { e.preventDefault(); if (!exporting && !modal) { if (k === 'y' || e.shiftKey) redo(); else undo(); } } else if (k === 's') { e.preventDefault(); saveProject(false); } else if (k === 'd' && selCam()) { e.preventDefault(); dupCam(selCam()); } return; }
     const locked = document.pointerLockElement === cv;
@@ -736,7 +813,7 @@ function bind() {
     else if (e.code === 'KeyN') $('#tagsBtn').click(); else if (e.code === 'KeyH') $('#helpBtn').click();
   });
   addEventListener('keyup', e => held.delete(e.code));
-  addEventListener('beforeunload', () => { if (cur && hasProject()) api.saveProject(cur.name, packProject(cur.name, rate, cams, ents)); });
+  addEventListener('beforeunload', () => { if (cur && hasProject()) api.saveProject(cur.name, packAll()); });
   api.onChanged(() => refresh());
 }
 
@@ -745,5 +822,6 @@ bind(); closeRecord(); refresh(); requestAnimationFrame(loop);
 window.__studio = { open: name => { const it = records.find(r => r.name === name); return it ? openRecord(it) : Promise.reject(new Error('record absent')); }, seek, addCam, addKey, startCine, setMode, selectCam, setParent: (i, s) => setParent(cams[i], s), modalStart,
   get cams() { return cams; }, setKey: (i, ch, sec, v) => { setKey(cams[i], ch, Math.round(sec * 1000), v); renderTracks(); renderProps(); }, valAt: (i, ch, sec) => valAt(cams[i].tracks[ch], sec * 1000), refreshUi, tab: n => bind.tab(n), get account() { return account; }, setAccount(a) { account = a; ai.render(); scene.render(); }, aiHost, pose: (i, t = T) => wpose(cams[i], t),
   get state() { return { images: loop.n || 0, ready: !!pb, T, dur: rec?.dur || 0, avatars: world?.avatars.size || 0, cams: cams.length, keys: cams.reduce((n, c) => n + keyTimes(c).length, 0), sel: selId, selCh, selT, mode, filtre: !!world?.post, poignees: !!giz?.hasHandles, cam: { ...cam }, room: world?.room?.id || null, chunks: world?.chunkQueue?.length || 0 }; },
-  get giz() { return giz; }, undo, redo, delCam: i => delCam(cams[i], true), toggleAllKeys, showCam: i => showCam(cams[i], true), get ents() { return ents; }, get scene() { return scene; }, get ai() { return ai; }, get pip() { return pip; }, get hist() { return { n: hist.list.length, i: hist.i }; }, flush: histCommit,
-  set(o) { Object.assign(cam, o); }, play: setPlaying, get world() { return world; }, get me() { return pb?.me; }, where: t => pb?.where(t), parents: () => parentChoices().map(p => p.name) };
+  get anim() { return anim; }, get giz() { return giz; }, undo, redo, delCam: i => delCam(cams[i], true), toggleAllKeys, showCam: i => showCam(cams[i], true), get ents() { return ents; }, get scene() { return scene; }, get ai() { return ai; }, get pip() { return pip; }, get hist() { return { n: hist.list.length, i: hist.i }; }, flush: histCommit,
+  set(o) { Object.assign(cam, o); }, play: setPlaying, get world() { return world; }, get me() { return pb?.me; }, where: t => pb?.where(t), parents: () => parentChoices().map(p => p.name),
+  get monde() { return monde; }, get xp() { return xp; }, get cur() { return cur; }, extras, snapshot, restore, keyTimes: allKeyTimes };

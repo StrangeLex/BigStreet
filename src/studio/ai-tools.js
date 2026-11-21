@@ -5,6 +5,10 @@
 // d'un personnage (dans la limite des skins du compte), masquer une entité, piloter la lecture, prévisualiser, exporter.
 // Unités de l'assistant : secondes, mètres (1 case = 1 m), degrés, pourcentages. Ce module ne touche ni au DOM ni au moteur : il
 // parle à un « hôte » (H, fourni par studio.js — ou par tools/selftest.mjs, qui le teste avec un faux modèle).
+// EXTENSIONS (21/11) : ce fichier n'importe rien (le selftest le charge seul). Un module qui ajoute des outils les donne à l'hôte :
+// H.ext = [{ tools: [T(…)], prompt: 'texte ajouté au prompt système', create(H, kit) → { RUN: { outil(a) → ok(…) | ko(…) },
+//   after(name, args, result) → result (après un outil réussi), problems() → [phrases], recapText() → phrase, digest() → objet } }]
+// (tout est facultatif ; kit : { ok, ko, ms, ent, camOf, noCam, writePose, fmtT, headY, sideAngle }). Exemple : ai-tools-geo.js.
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 const r2 = v => Math.round(v * 100) / 100, r1 = v => Math.round(v * 10) / 10;
 const num = v => (typeof v === 'number' && Number.isFinite(v) ? v : typeof v === 'string' && v.trim() !== '' && Number.isFinite(+v) ? +v : null);
@@ -88,7 +92,8 @@ const ENT = S('Entité : son id (nombre), son nom ou pseudo, ou "joueur" (celui 
 const LOOKAT = { type: 'object', description: 'Point visé : une entité (visage d’un personnage, centre d’un véhicule) ou un point du monde.', properties: { entity: ENT, x: N('X'), y: N('Y'), z: N('Z') }, additionalProperties: false };
 const KEYP = { t: TS, x: N('Position X (m)'), y: N('Position Y, hauteur (m)'), z: N('Position Z (m)'), yaw: N('Lacet (°)'), pitch: N('Tangage (°), négatif = vers le bas'), roll: N('Roulis (°)'), fov: N('Focale (°), 5–130'),
   vignette: N('0–100'), grain: N('0–100'), dof: N('Flou de profondeur 0–100'), raytracing: N('0–100'), look_at: LOOKAT, ease: S('Interpolation vers la clé suivante.', { enum: ['fluide', 'doux', 'accel', 'frein', 'fixe'] }) };
-const IMG = { filter: S('Filtre.', { enum: ['', 'nuit', 'thermique', 'nb', 'sepia', 'cine'] }), shadow: B('Ombres portées en temps réel.'), raytracing: N('Valeur fixe 0–100.'), vignette: N('Valeur fixe 0–100.'), grain: N('Valeur fixe 0–100.'), dof: N('Valeur fixe 0–100.') };
+const IMG = { filter: S('Filtre.', { enum: ['', 'nuit', 'thermique', 'nb', 'sepia', 'cine'] }), shadow: B('Ombres portées en temps réel.'), raytracing: N('Valeur fixe 0–100 (jusqu’à 300 pour un compte VIP).'),
+  rt_ao: N('Raytracing, réglage fin : force de l’occlusion ambiante, 0–200 (100 = normal).'), rt_radius: N('Rayon de l’occlusion, 0–200 (100 = normal).'), rt_bloom: N('Halo des lumières, 0–200.'), rt_reflets: N('Reflets du sol, 0–200.'), vignette: N('Valeur fixe 0–100.'), grain: N('Valeur fixe 0–100.'), dof: N('Valeur fixe 0–100.') };
 const SHOTP = { subject: ENT, shot: S('Valeur de plan.', { enum: Object.keys(SHOTS) }), side: S('D’où la caméra regarde le sujet, par rapport à là où IL regarde : face = devant lui, dos = derrière lui, profil_droit = à sa droite…', { enum: Object.keys(SIDES) }),
   height: S('Hauteur de la caméra : yeux, plongee (au-dessus, 30°), forte_plongee (55°), aerien (72°), contre_plongee (en dessous), sol (au ras du sol).', { enum: Object.keys(HEIGHTS) }), fov: N('Focale (°) ; par défaut celle conseillée pour ce plan.'),
   thirds: S('Règle des tiers : où placer le sujet dans le cadre.', { enum: ['centre', 'gauche', 'droite'] }), distance: N('Distance au sujet en mètres (remplace celle calculée d’après la valeur de plan).') };
@@ -121,18 +126,38 @@ export const TOOLS = [
   T('reset_appearance', 'Rend à un personnage son apparence d’origine (celle du record).', P({ entity: ENT }, ['entity']), true),
   T('set_visibility', 'Masque ou montre une entité (personnage, véhicule, objet) dans la scène.', P({ entity: ENT, visible: B('Visible ou non.') }, ['entity', 'visible']), true),
   T('preview_cinematic', 'Lance la prévisualisation de la cinématique dans la vue (les caméras actives s’enchaînent).', P({})),
-  T('export_video', 'Exporte la cinématique en vidéo (.webm) à côté du record. Seulement si l’utilisateur le demande.', P({})),
+  T('export_video', 'Ouvre la page « Exporter » (l’utilisateur y choisit format, compression, nom, début et fin). Pour lancer un export réglé : export_cinematic. Seulement si l’utilisateur le demande.', P({})),
 ];
-export const toolSchemas = () => TOOLS.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
+// Familles d'outils « à la demande » : hors de ces familles (caméras, scène, géométrie, lecture), un outil part toujours au modèle. Une
+// famille s'ouvre quand la demande de l'utilisateur en parle (when, sur le texte sans accents), quand un de ses outils a déjà servi,
+// ou quand le modèle la demande (list_tool_groups). Un outil d'extension choisit sa famille par son champ « group », sinon par GROUP_OF.
+export const TOOL_GROUPS = {
+  animation: { label: 'ajouter et animer des objets, des PNJ, des faux joueurs ; poses, émotes, chutes, particules', when: /objet|modele|caisse|carton|tomb|chute|renvers|pnj|personnage|passant|figurant|faux joueur|ajout|rajout|pose|coucou|salu|danse|emote|geste|particule|fumee|etincelle|porte|voiture|deplac|bouge|anime|element|apparai|lance|jette/ },
+  lumieres: { label: 'lumières ajoutées, éclairage du lieu, miroirs', when: /lumi|lampe|eclair|spot|sombre|obscur|noir|etein|allum|nuit|ambiance|horreur|peur|angoiss|miroir|neon|projecteur|penombre/ },
+  titres: { label: 'titres et textes, fondus, tremblement de caméra, capture d’image', when: /titre|texte|sous titre|generique|fondu|trembl|secou|capture|photo|image fixe|affiche le/ },
+  monde: { label: 'heure du jour, météo, ciel, brouillard', when: /heure|nuit|jour|matin|soir|midi|minuit|meteo|pluie|pleut|brouillard|brume|ciel|coucher|aube|crepuscule|orage|ambiance|horreur/ },
+  export: { label: 'exporter la cinématique en vidéo', when: /export|mp4|webm|gif|avi|video|fichier|rendu final/ },
+  apparence: { label: 'tenues et apparence des personnages, masquer une entité', when: /tenue|habit|habill|vetement|apparence|skin|chapeau|coiff|cheveu|lunette|masqu|cache|invisible|disparai|sac|look|deguis|en main/ },
+};
+const GROUP_OF = Object.fromEntries(Object.entries({
+  animation: 'list_elements search_models add_object add_character add_particles animate_element make_fall update_element delete_element delete_element_keys list_poses set_pose play_emote',
+  lumieres: 'add_light add_mirror list_scene_lights set_scene_lighting set_scene_light', titres: 'add_text add_title set_fade capture_image set_camera_shake',
+  monde: 'world_settings set_world set_world_keys', export: 'export_cinematic export_video', apparence: 'appearance_options set_appearance reset_appearance set_visibility',
+}).flatMap(([g, names]) => names.split(' ').map(n => [n, g])));
+export const toolSchemas = (list = TOOLS) => list.map(t => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } }));
 
 // ---------------------------------------------------------------- Exécution
 export function createEngine(H) {
   const C = H.C, ok = (text, data = {}) => ({ ok: true, text: `✓ ${text}`, data }), ko = text => ({ ok: false, text: `✗ ${text}`, data: {} });
   const ms = (v, def = null) => { const n = num(v); return n === null ? def : Math.round(clamp(n, 0, H.dur / 1000) * 1000); };
-  const ent = q => (q == null || q === '' ? null : H.find(q));
+  // (une entité par son id exact — nombre ou texte, objets du décor compris : « p164 » —, sa clé « i:p164 », « #12 », « id 12 », son nom)
+  const ent = q => { if (q == null || q === '') return null; const L = H.entities(), s = String(q).trim(), bare = s.replace(/^(?:id|pnj|npc|objet|entite|entité|joueur|#)\s*[:#n°]*\s*(?=\S)/i, '');
+    return H.find(q) || L.find(e => e.key === s) || L.find(e => String(e.id) === s) || (bare !== s && /^[a-z]{0,2}\d+$/i.test(bare) ? L.find(e => String(e.id) === bare && e.kind !== 'objet') || L.find(e => String(e.id) === bare) : null) || L.find(e => e.kind === 'objet' && nrm(e.name) === nrm(s)) || null; };
   const camOf = q => { const s = nrm(q); return s ? H.cams.find(c => c.id === q) || H.cams.find(c => nrm(c.name) === s) || H.cams.find(c => nrm(c.name).replace(/ /g, '') === s.replace(/ /g, '')) || H.cams.find(c => nrm(c.name).includes(s) || s.includes(nrm(c.name))) || null : null; };
   const noCam = (q, tool) => ({ ...ko(`Caméra « ${q ?? ''} » introuvable${H.cams.length ? ` (caméras existantes : ${H.cams.map(c => `« ${c.name} »`).join(', ')})` : ' (aucune caméra n’existe encore)'} : crée-la d’abord avec frame_shot, create_camera ou orbit_shot, puis rappelle ${tool}.`), retry: true });
   const headY = e => (e.kind === 'vehicule' ? 0.8 : e.kind === 'objet' ? 0.5 : 1.5);
+  const rtMax = () => { const m = +H.rtMax?.(); return m > 0 ? m : 100; };   // (raytracing : 100, ou 300 pour un compte VIP)
+  const RT_FINE = { rt_ao: 'rtAo', rt_radius: 'rtRad', rt_bloom: 'rtBloom', rt_reflets: 'rtRefl' };
   const pos = (e, t) => H.posAt(e.key, t);
   const target = (la, t) => { if (!la) return null; if (la.entity != null) { const e = ent(la.entity), p = e && pos(e, t); return p ? { x: p.x, y: p.y + headY(e) - (e.kind === 'vehicule' || e.kind === 'objet' ? 0 : 0.1), z: p.z, name: e.name } : null; } const x = num(la.x), y = num(la.y), z = num(la.z); return x === null || z === null ? null : { x, y: y ?? 1, z, name: 'le point' }; };
   const aim = (from, to) => { const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z; return { yaw: Math.atan2(dz, dx), pitch: clamp(Math.atan2(dy, Math.hypot(dx, dz)), -1.55, 1.55) }; };
@@ -158,7 +183,7 @@ export function createEngine(H) {
   }
   function shotPose(e, t, a) {
     const p = pos(e, t); if (!p) return null;
-    const S0 = SHOTS[a.shot] || SHOTS.moyen, k = e.kind === 'vehicule' ? 2.3 : 1, fov = clamp(num(a.fov) ?? S0[2], 8, 120), ht = e.kind === 'vehicule' ? 0.8 : e.kind === 'objet' ? 0.5 : S0[1];
+    const S0 = SHOTS[a.shot] || SHOTS.moyen, k = e.kind === 'vehicule' ? 2.3 : 1, fov = clamp(num(a.fov) ?? S0[2], 8, 120), ht = e.kind === 'vehicule' ? 0.8 : e.kind === 'objet' ? Math.max(0.4, (H.geo?.topOf?.(p.x, p.z) ?? 0.8) * 0.62) : S0[1];
     const tgt = { x: p.x, y: p.y + ht, z: p.z }, az = p.yaw + (SIDES[a.side] ?? SIDES.trois_quarts_droit) * D2R;
     let d = num(a.distance) ?? (S0[0] * k / 2) / Math.tan(fov * D2R / 2); d = clamp(d, 0.35, 120);
     const hgt = a.height in HEIGHTS ? a.height : 'yeux', el = HEIGHTS[hgt] === null ? null : HEIGHTS[hgt] * D2R;
@@ -244,9 +269,11 @@ export function createEngine(H) {
       const c = camOf(a.camera); if (!c) return noCam(a.camera, 'cet outil');
       if (a.parent === null || a.parent === '' || a.parent === 'null') { C.rebase(c, H.cams, H.frame, () => { c.parent = null; c.look = false; c.follow = false; }); return ok(`${c.name} détachée : elle est libre dans la scène.`); }
       const pc = camOf(a.parent), e = pc ? null : ent(a.parent);
+      // (un élément ajouté à la scène — objet, lumière, groupe : anim.js — peut aussi porter une caméra)
+      const ao = !pc && (!e || e.kind === 'objet') ? (o => (o && !['ref', 'perso', 'ambiance', 'lampe', 'effets', 'audio', 'titre'].includes(o.kind) ? o : null))(H.anim?.find?.(a.parent)) : null;
       if (pc) { if (pc === c || C.wouldLoop(c, pc.id, H.cams)) return ko('Impossible : ces caméras se suivraient en boucle.'); }
-      else if (!e || e.kind === 'objet') return ko(`Parent « ${a.parent} » introuvable (personnage, véhicule ou caméra).`);
-      const P1 = pc ? { kind: 'camera', id: pc.id, name: pc.name } : { kind: e.kind === 'vehicule' ? 'vehicule' : 'perso', id: e.id, name: e.name };
+      else if (!ao && (!e || e.kind === 'objet')) return ko(`Parent « ${a.parent} » introuvable (personnage, véhicule, caméra ou élément ajouté).`);
+      const P1 = pc ? { kind: 'camera', id: pc.id, name: pc.name } : ao ? { kind: 'objet', id: ao.id, name: ao.name } : { kind: e.kind === 'vehicule' ? 'vehicule' : 'perso', id: e.id, name: e.name };
       C.rebase(c, H.cams, H.frame, () => { c.parent = P1; if (typeof a.follow === 'boolean') c.follow = a.follow; else if (P1.kind === 'vehicule') c.follow = true; });
       if (typeof a.look === 'boolean') c.look = a.look;
       return ok(`${c.name} attachée à ${P1.name}${c.follow ? ', tourne avec lui' : ''}${c.look ? ', le regarde' : ''} (sans bouger : ses clés sont maintenant relatives à ${P1.name}).`, { camera: c.name });
@@ -270,7 +297,7 @@ export function createEngine(H) {
         }
         const ease = C.EASES[k.ease] ? k.ease : null;
         n += writePose(c, t, v, local, ease);
-        for (const [name, ch] of Object.entries(FX)) { const q = num(k[name]); if (q !== null) { C.setKey(c, ch, t, clamp(q, 0, 100) / 100, ease); n++; } }
+        for (const [name, ch] of Object.entries(FX)) { const q = num(k[name]); if (q !== null) { C.setKey(c, ch, t, clamp(q, 0, ch === 'rt' ? rtMax() : 100) / 100, ease); n++; } }
         if (ease && !Object.keys(v).length) C.easeAt(c, null, t, ease);
         if (!local && 'x' in v && 'z' in v && !c.parent && H.blocked(v.x, v.z)) notes.push(`⚠ à ${fmtT(t)} la caméra semble dans un mur ou hors du lieu`);
         times.push(t);
@@ -336,13 +363,14 @@ export function createEngine(H) {
     reset_appearance(a) { const e = ent(a.entity); if (!e) return ko(`« ${a.entity} » : entité introuvable.`); H.resetLook(e.id); return ok(`${e.name} a retrouvé son apparence d’origine.`); },
     set_visibility(a) { const e = ent(a.entity); if (!e) return ko(`« ${a.entity} » : entité introuvable.`); H.setHidden(e.key, a.visible === false); return ok(`${e.name} ${a.visible === false ? 'masqué' : 'visible'}.`); },
     preview_cinematic() { return H.preview() ? ok('Prévisualisation lancée dans la vue.') : ko('Pas de cinématique à prévisualiser : il faut au moins une caméra active avec deux clés.'); },
-    export_video() { return H.exportVideo() ? ok('Export vidéo lancé : la cinématique est filmée, le fichier .webm sera à côté du record.') : ko('Export impossible : il faut au moins une caméra active avec deux clés.'); },
+    export_video() { return H.exportVideo() ? ok('Page « Exporter » ouverte : l’utilisateur choisit le format (WebM, MP4, AVI, GIF), la compression, le nom, le début et la fin.') : ko(H.C?.cineRange && !H.C.cineRange(H.cams) ? 'Pas d’export : il n’y a pas encore de cinématique (aucune caméra active avec au moins deux images-clés). Crée d’abord les plans, puis propose l’export.' : 'Export impossible pour le moment (un export est déjà en cours).'); },
   };
   /** Ce qui cloche dans un montage (plans trop courts, caméras jamais à l'antenne, début ou fin non couverts) : des phrases pour l'assistant */
   function problems(plans, R, old = null) {
     const out = [], dur = H.dur / 1000;
     for (const p of plans) if (p.duree < MIN_SHOT) out.push(`plan « ${p.camera} » trop court (${p.duree} s, de ${p.debut} à ${p.fin} s) : allonge-le à ${MIN_SHOT} s au moins (move_keys / set_keys) ou supprime sa caméra (delete_camera)`);
     const air = new Set(plans.map(p => p.camera));
+    for (const x of EXT) { try { out.push(...(x.run.problems?.(old) || [])); } catch (e) { console.warn('extension : problèmes', e); } }
     for (const c of H.cams) if (c.on && !air.has(c.name) && !old?.has(c.id)) out.push(C.keyTimes(c, C.CH).length < 2 ? `caméra « ${c.name} » : une seule clé, elle n’a pas de durée — ajoute sa clé de fin (frame_shot ou set_keys à un autre instant) ou supprime-la` : `caméra « ${c.name} » jamais à l’antenne (recouverte par une autre) : décale ses clés ou supprime-la`);
     return out;
   }
@@ -350,18 +378,50 @@ export function createEngine(H) {
     const did = [];
     if (typeof a.filter === 'string' && a.filter in C.FILTERS) { c.filter = a.filter; did.push(`filtre ${a.filter ? C.FILTERS[a.filter] : 'retiré'}`); }
     if (typeof a.shadow === 'boolean') { c.shadow = a.shadow; did.push(a.shadow ? 'ombres activées' : 'ombres coupées'); }
-    for (const [name, ch] of Object.entries(FX)) { const q = num(a[name]); if (q === null) continue; const v = clamp(q, 0, 100) / 100; if (c.tracks[ch].length === 1) c.tracks[ch][0].v = v; else if (c.tracks[ch].length > 1) { did.push(`${name} : déjà animé (utilise set_keys)`); continue; } c[ch] = v; did.push(`${name} ${Math.round(v * 100)}`); }
+    for (const [name, f] of Object.entries(RT_FINE)) { const q = num(a[name]); if (q !== null) { c[f] = clamp(q, 0, 200) / 100; did.push(`${name} ${Math.round(c[f] * 100)}`); } }
+    for (const [name, ch] of Object.entries(FX)) { const q = num(a[name]); if (q === null) continue; const v = clamp(q, 0, ch === 'rt' ? rtMax() : 100) / 100; if (ch === 'rt' && q > rtMax()) did.push(`raytracing limité à ${rtMax()} (au-delà : compte VIP)`); if (c.tracks[ch].length === 1) c.tracks[ch][0].v = v; else if (c.tracks[ch].length > 1) { did.push(`${name} : déjà animé (utilise set_keys)`); continue; } c[ch] = v; did.push(`${name} ${Math.round(v * 100)}`); }
     return did;
   }
-  const byName = new Map(TOOLS.map(t => [t.name, t]));
+  const sideAngle = v => { const k = pickKey(SIDES, v, SIDE_SYN); return k ? SIDES[k] * D2R : null; };
+  const EXT = (H.ext || []).map(x => { try { return { def: x, run: x.create?.(H, { ok, ko, ms, ent, camOf, noCam, writePose, fmtT, headY, sideAngle }) || {} }; } catch (e) { console.warn('extension de l’assistant', e); return null; } }).filter(Boolean);
+  for (const x of EXT) Object.assign(RUN, x.run.RUN || {});
+  const ALL = [...TOOLS, ...EXT.flatMap(x => x.def.tools || [])], byName = new Map(ALL.map(t => [t.name, t]));
+  // Familles d'outils (cf. TOOL_GROUPS) : seules les familles utiles à la demande partent au modèle — moins de jetons, moins de
+  // confusion. « active » : les familles ouvertes dans cette conversation (demande, outil déjà appelé, list_tool_groups).
+  const active = new Set(), groupOf = name => byName.get(name)?.group || GROUP_OF[name] || null;
+  RUN.list_tool_groups = a => {
+    const want = (Array.isArray(a.enable) ? a.enable : a.enable ? [a.enable] : []).map(g => nrm(g).replace(/ /g, '_')).filter(g => g.length >= 3), opened = [];
+    for (const g of Object.keys(TOOL_GROUPS)) if (want.some(w => w === g || w === 'tout' || w === 'toutes' || g.startsWith(w) || w.startsWith(g))) { active.add(g); opened.push(g); }
+    return ok(opened.length ? `Familles d’outils ouvertes : ${opened.join(', ')} — leurs outils sont disponibles dès maintenant.` : 'Familles d’outils à la demande (enable: ["nom"] pour en ouvrir).', { familles: Object.entries(TOOL_GROUPS).map(([id, g]) => ({ id, pour: g.label, ouverte: active.has(id), outils: ALL.filter(t => groupOf(t.name) === id).map(t => t.name) })).filter(g => g.outils.length) });
+  };
+  const META = T('list_tool_groups', 'Les familles d’outils à la demande (animation d’objets et de PNJ, lumières, titres et effets, monde et météo, export, apparence) : liste, et ouverture avec enable. À appeler dès que la demande sort des caméras et qu’un outil nécessaire n’est pas dans ta liste.', P({ enable: { type: 'array', items: { type: 'string' }, description: 'Familles à ouvrir (ex. ["animation", "lumieres"]) ; "tout" pour toutes.' } }));
+  byName.set(META.name, META);
   return {
-    tools: toolSchemas(),
+    tools: toolSchemas(ALL), ext: EXT.map(x => x.run), active,
+    /** Ouvre les familles que la conversation réclame : mots de la demande, outils déjà appelés, familles déjà ouvertes */
+    open(history) {
+      for (const m of history) {
+        if (m.role === 'user' && typeof m.content === 'string' && !m.content.startsWith('[')) { const s = nrm(m.content.split('\n\n[État du Studio]')[0]); for (const [g, G] of Object.entries(TOOL_GROUPS)) if (G.when.test(s)) active.add(g); }
+        for (const c of m.tool_calls || []) { const g = groupOf(c.function?.name); if (g) active.add(g); if (c.function?.name === 'list_tool_groups') { try { RUN.list_tool_groups(JSON.parse(c.function.arguments || '{}')); } catch { /* arguments illisibles */ } } }
+      }
+    },
+    /** Les outils envoyés au modèle à cet instant : les caméras et la géométrie toujours, les familles ouvertes, et list_tool_groups s'il en reste de fermées */
+    toolsNow() { const L = ALL.filter(t => !groupOf(t.name) || active.has(groupOf(t.name))); return toolSchemas(L.length < ALL.length ? [...L, META] : L); },
+    /** Le prompt système à cet instant : celui des extensions dont au moins un outil est disponible, et le rappel des familles fermées */
+    promptNow() {
+      const on = x => !(x.def.tools || []).length || x.def.tools.some(t => !groupOf(t.name) || active.has(groupOf(t.name)));
+      const shut = Object.entries(TOOL_GROUPS).filter(([g]) => !active.has(g) && ALL.some(t => groupOf(t.name) === g)).map(([g, G]) => `${g} (${G.label})`);
+      return SYSTEM_PROMPT + EXT.filter(on).map(x => x.def.prompt || '').join('') + (shut.length ? `\n\n# Outils à la demande\nD'autres familles d'outils existent mais ne sont pas chargées : ${shut.join(' ; ')}. Si la demande en a besoin, appelle d'abord list_tool_groups avec enable (ex. { "enable": ["animation"] }) : leurs outils apparaissent aussitôt. N'invente jamais un nom d'outil.` : '');
+    },
     isMutating: name => !!byName.get(name)?.mut,
     /** Exécute un outil : { ok, text (« ✓ … » ou « ✗ … », montré dans le fil), data } — jamais d'exception */
     exec(name, args) {
       const fn = RUN[name]; if (!fn) return ko(`Outil « ${name} » inconnu.`);
       let a = args; if (typeof a === 'string') { try { a = a.trim() ? JSON.parse(a) : {}; } catch { return ko(`${name} : arguments illisibles (JSON invalide).`); } }
-      try { const r = fn(a && typeof a === 'object' ? a : {}); if (r.ok && byName.get(name).mut) H.changed(); return r; } catch (e) { return ko(`${name} : erreur (${String(e?.message || e).slice(0, 160)}).`); }
+      try { a = a && typeof a === 'object' ? a : {};
+        // (« entity », « element » et « character » désignent la même chose : le modèle les confond d'un outil à l'autre — tous acceptés partout)
+        { const who = a.entity ?? a.element ?? a.character; if (who != null && who !== '') { a = { ...a }; a.entity ??= who; a.element ??= who; a.character ??= who; } }
+        if (groupOf(name)) active.add(groupOf(name)); let r = fn(a); if (r.ok) for (const x of EXT) if (x.run.after) { try { r = x.run.after(name, a, r) || r; } catch (e) { console.warn('extension : après', name, e); } } if (r.ok && byName.get(name)?.mut) H.changed(); return r; } catch (e) { return ko(`${name} : erreur (${String(e?.message || e).slice(0, 160)}).`); }
     },
     /**
      * Un lot d'appels du modèle, dans l'ordre. Un appel qui vise une caméra pas encore créée (le modèle règle parfois un plan avant de
@@ -373,7 +433,8 @@ export function createEngine(H) {
       return out;
     },
     /** Le montage réel, en une phrase, et ses problèmes : { text, plans, problems } */
-    recap(old = null) { const d = RUN.cinematic_summary(old).data; return { plans: d.plans || [], problems: d.problemes || [], text: d.plans?.length ? `Montage réel : ${d.plans.length} plan${d.plans.length > 1 ? 's' : ''}, ${d.duree} s — ${d.plans.map(p => `« ${p.camera} » ${p.debut}→${p.fin} s`).join(' · ')}.` : '' }; },
+    recap(old = null) { const d = RUN.cinematic_summary(old).data, more = d.plans?.length ? EXT.map(x => { try { return x.run.recapText?.() || ''; } catch { return ''; } }).filter(Boolean) : [];
+      return { plans: d.plans || [], problems: d.problemes || [], text: d.plans?.length ? `Montage réel : ${d.plans.length} plan${d.plans.length > 1 ? 's' : ''}, ${d.duree} s — ${d.plans.map(p => `« ${p.camera} » ${p.debut}→${p.fin} s`).join(' · ')}.${more.length ? `\n${more.join('\n')}` : ''}` : '' }; },
   };
 }
 
@@ -381,7 +442,7 @@ export function createEngine(H) {
 /** L'état du Studio joint à chaque message de l'utilisateur : de quoi agir sans poser de question */
 export function digest(H) {
   const eng = createEngine({ ...H, changed() {} }), I = H.info(), L = eng.exec('list_entities', { limit: 30 }).data, C0 = eng.exec('list_cameras', {}).data;
-  return JSON.stringify({ lieu: I.lieu, interieur: I.interieur, duree_s: r2(H.dur / 1000), heure_du_jeu: I.heure, nuit: I.nuit, instant_courant_s: r2(H.T / 1000), joueur: I.joueur, format_image: r2(H.aspect()), entites_proches: L.entites, autres_entites: Math.max(0, L.total - L.entites.length), cameras: C0.cameras, compte: I.compte });
+  return JSON.stringify({ lieu: I.lieu, interieur: I.interieur, duree_s: r2(H.dur / 1000), heure_du_jeu: I.heure, nuit: I.nuit, instant_courant_s: r2(H.T / 1000), joueur: I.joueur, format_image: r2(H.aspect()), entites_proches: L.entites, autres_entites: Math.max(0, L.total - L.entites.length), cameras: C0.cameras, compte: I.compte, ...Object.assign({}, ...eng.ext.map(x => { try { const d = x.digest?.(); return d ? { fiche_du_lieu: d } : {}; } catch { return {}; } })) });
 }
 /** Actions écrites dans le texte (modèle sans appel d'outils natif) : [{ name, args }] ou null */
 export function parseTextActions(text) {
@@ -398,9 +459,19 @@ export function parseTextActions(text) {
  * history : messages au format OpenAI déjà échangés (sans le prompt système) ; il est complété sur place.
  * Rend { text, actions: [{ ok, text, name }], changed (le projet a été modifié), error }.
  */
+/**
+ * Ce que le Studio a REFUSÉ pendant ce tour et qui n'a pas été rattrapé (aucun appel réussi du même outil ensuite) : écrit sous la
+ * réponse par le moteur — le modèle ne peut pas laisser croire qu'une action refusée a été faite. actions : [{ ok, name, text }].
+ */
+export function refusedText(actions) {
+  const left = actions.filter((a, i) => !a.ok && !actions.slice(i + 1).some(b => b.ok && b.name === a.name)), seen = new Set(), L = [];
+  for (const a of left) { const t = `${a.name} — ${String(a.text).replace(/^✗\s*/, '').slice(0, 220)}`; if (!seen.has(t)) { seen.add(t); L.push(t); } }
+  return L.length ? `\n\n⚠ ${L.length > 1 ? `${L.length} actions ont été refusées par le Studio et n’ont PAS été faites` : 'Une action a été refusée par le Studio et n’a PAS été faite'} :\n${L.slice(0, 6).map(t => `• ${t}`).join('\n')}${L.length > 6 ? `\n• … et ${L.length - 6} autre${L.length > 7 ? 's' : ''}` : ''}` : '';
+}
 export async function runTurn(H, history, userText, ask, on = () => {}, maxRounds = 14, wait = ms => new Promise(r => setTimeout(r, ms))) {
   const eng = createEngine(H), actions = [], old = new Set(H.cams.map(c => c.id)); let changed = false, text = '', error = null, checked = 0;
   history.push({ role: 'user', content: `${userText}\n\n[État du Studio] ${digest(H)}` });
+  eng.open(history);
   const run = calls => { const R = eng.batch(calls); R.forEach(r => { if (r.ok && eng.isMutating(r.name)) changed = true; const a = { ok: r.ok, text: r.text, name: r.name }; actions.push(a); on({ type: 'action', ...a }); }); return R; };
   for (let round = 0; round < maxRounds; round++) {
     // (contexte borné : le prompt, puis les échanges les plus récents — un échange d'outils n'est jamais coupé en deux)
@@ -408,13 +479,14 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
     // (site occupé — 429, « Doucement », « Trop de requêtes » — : on attend et on réessaie, jusqu'à trois fois)
     let res;
     for (let tries = 0; ; tries++) {
-      try { res = await ask({ messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...history.slice(from)], tools: eng.tools }); } catch (e) { res = { error: String(e?.message || e) }; }
+      try { res = await ask({ messages: [{ role: 'system', content: eng.promptNow() }, ...history.slice(from)], tools: eng.toolsNow() }); } catch (e) { res = { error: String(e?.message || e) }; }
       const busy = res && !res.message && (res.status === 429 || /doucement|trop de requ|rate.?limit|déjà en cours/i.test(String(res.error || '')));
       if (!busy || tries >= 3) break;
       on({ type: 'wait', text: `Le site est occupé : nouvel essai dans ${[1.5, 3, 6][tries]} s…` }); await wait([1500, 3000, 6000][tries]);
     }
     if (!res || res.error || !res.message) { error = { text: res?.error || 'L’assistant n’a pas répondu.', vip: res?.vip, login: res?.login }; break; }
-    const m = res.message, calls = Array.isArray(m.tool_calls) ? m.tool_calls.filter(c => c?.function?.name) : [];
+    // (au plus 30 appels d'outils par réponse : le site en refuse plus de 32 dans un message — « Appels d’outils invalides » —, la conversation était perdue ; le modèle voit ses 30 résultats et continue)
+    const m = res.message, calls = Array.isArray(m.tool_calls) ? m.tool_calls.filter(c => c?.function?.name).slice(0, 30) : [];
     if (calls.length) {
       history.push({ role: 'assistant', content: m.content || '', tool_calls: calls });
       if (m.content) { text = m.content; on({ type: 'say', text: m.content }); }
@@ -440,9 +512,10 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
     }
     // (le résumé du modèle est suivi du montage réel : ce que l'utilisateur lit correspond toujours à ce qui existe)
     if (rc?.text) text += `\n\n${rc.text}${rc.problems.length ? `\n⚠ ${rc.problems.join('\n⚠ ')}` : ''}`;
+    text += refusedText(actions);
     history.push({ role: 'assistant', content: text }); on({ type: 'say', text, final: true });
     return { text, actions, changed, error: null, recap: rc };
   }
-  if (!error) { const rc = changed ? eng.recap(old) : null; text = `${text || 'J’ai fait une première série d’actions ; dis-moi si je continue.'}${rc?.text ? `\n\n${rc.text}` : ''}`; history.push({ role: 'assistant', content: text }); }
+  if (!error) { const rc = changed ? eng.recap(old) : null; text = `${text || 'J’ai fait une première série d’actions ; dis-moi si je continue.'}${rc?.text ? `\n\n${rc.text}` : ''}${refusedText(actions)}`; history.push({ role: 'assistant', content: text }); }
   return { text, actions, changed, error };
 }

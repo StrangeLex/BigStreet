@@ -55,6 +55,9 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
 
   // Poignées de déplacement et de rotation
   let tc = null, tcHelper = null, proxy = new THREE.Object3D(), attached = null, lastYaw = 0, mode = 'translate', enabled = true, veiled = false;
+  // (ext : un élément animé — objet, personnage, lumière… cf. anim.js — qui porte les poignées quand aucune caméra n'est sélectionnée :
+  // { id, get() → { p: [x, y, z], q: [x, y, z, w], s: [x, y, z] }, change(mode, proxy), space })
+  let ext = null, extOn = false;
   world.scene.add(proxy);
   try {
     const { TransformControls } = makeTransformControls(THREE);
@@ -65,8 +68,9 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
     // l'origine du monde et le pointeur ne les touchait jamais. Elles deviennent « visibles » avec un matériau qui ne se dessine pas.)
     for (const g of Object.values(tc._gizmo?.picker || {})) { g.visible = true; g.traverse(o => { if (o.material) o.material.visible = false; }); }
     tcHelper = tc.getHelper ? tc.getHelper() : tc; world.scene.add(tcHelper);
-    tc.addEventListener('dragging-changed', e => cb.drag?.(!!e.value));
+    tc.addEventListener('dragging-changed', e => { if (extOn && ext) ext.drag?.(!!e.value); cb.drag?.(!!e.value); });
     tc.addEventListener('objectChange', () => {
+      if (extOn && ext) { ext.change?.(mode, proxy); return; }
       if (!attached) return;
       const a = anglesOf(proxy.quaternion, lastYaw); lastYaw = a.yaw;
       cb.change?.(attached, mode === 'rotate' ? a : { x: proxy.position.x, y: proxy.position.y, z: proxy.position.z });
@@ -77,7 +81,9 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
     quatOf, anglesOf, hasHandles: !!tc, get tc() { return tc; },
     get dragging() { return !!tc?.dragging; },
     /** le pointeur est-il sur une poignée ? (le clic lui revient alors, pas à la prise de la caméra libre) */
-    get hover() { return !!tc && enabled && !!attached && tcHelper.visible && tc.axis !== null; },
+    get hover() { return !!tc && enabled && (!!attached || extOn) && tcHelper.visible && tc.axis !== null; },
+    /** Les poignées sur un élément animé (null : aucun) — une caméra sélectionnée garde la priorité */
+    setExt(e) { ext = e || null; if (!ext) extOn = false; }, get ext() { return extOn ? ext : null; },
     /** Poignées utilisables ou non (pointeur pris par la caméra libre : elles ne doivent pas réagir à un pointeur figé) */
     setEnabled(on) { enabled = !!on; if (tc) { tc.enabled = enabled && !!attached; if (!enabled) tc.axis = null; } },
     /** Cache (ou remet) tout ce que ce module dessine dans la scène — le temps de calculer l'aperçu d'une caméra */
@@ -91,7 +97,7 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
     /** Position à l'écran (pixels de la fenêtre) d'un point du monde — essais automatiques */
     screen(x, y, z) { const r = canvas.getBoundingClientRect(); v.set(x, y, z).project(world.camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height, front: v.z < 1 }; },
     get mode() { return mode; },
-    setMode(m) { mode = m === 'rotate' ? 'rotate' : 'translate'; if (tc) { tc.setMode(mode); tc.setSpace(mode === 'rotate' ? 'local' : 'world'); } },
+    setMode(m) { mode = m === 'rotate' ? 'rotate' : m === 'scale' ? 'scale' : 'translate'; if (tc) { tc.setMode(mode); tc.setSpace(mode === 'translate' ? 'world' : 'local'); } },
     /**
      * Met la scène à jour. list : [{ id, name, color, parentName, pose (monde) | null, lost }], sel : id de la caméra
      * sélectionnée, show : dessiner les caméras (pas pendant une cinématique ni en vue caméra), aspect : format de l'image.
@@ -117,7 +123,14 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
       }
       const s = show ? list.find(c => c.id === sel && c.pose) : null;
       attached = s ? s.id : null;
+      const X = !s && show && ext ? ext.get() : null; extOn = !!X;
+      if (tc && X) {   // (un élément animé porte les poignées)
+        tc.camera = cam; if (mode === 'scale' && ext.noScale) G.setMode('translate');
+        if (!tc.dragging) { proxy.position.set(...X.p); proxy.quaternion.set(...X.q); proxy.scale.set(...X.s); proxy.updateMatrixWorld(); }
+        if (tc.object !== proxy) tc.attach(proxy); tcHelper.visible = true; tc.enabled = enabled; return;
+      }
       if (tc) {
+        if (mode === 'scale') G.setMode('translate'); proxy.scale.set(1, 1, 1);
         tc.camera = cam;
         if (s && !tc.dragging) { proxy.position.set(s.pose.x, s.pose.y, s.pose.z); quatOf(s.pose, proxy.quaternion); lastYaw = s.pose.yaw; proxy.updateMatrixWorld(); }
         if (s && tc.object !== proxy) tc.attach(proxy); else if (!s && tc.object) tc.detach();
@@ -137,7 +150,7 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
       ray.setFromCamera(v, world.camera); const o = ray.ray.origin, d = ray.ray.direction;
       return { o: [o.x, o.y, o.z], d: [d.x, d.y, d.z] };
     },
-    clear() { for (const id of [...helpers.keys()]) drop(id); if (tc?.object) tc.detach(); if (tcHelper) tcHelper.visible = false; attached = null; },
+    clear() { for (const id of [...helpers.keys()]) drop(id); if (tc?.object) tc.detach(); if (tcHelper) tcHelper.visible = false; attached = null; extOn = false; },
   };
   return G;
 }

@@ -125,6 +125,17 @@
   .hero .mini{position:absolute;left:22px;right:22px;bottom:88px;height:6px;border-radius:4px;
     background:rgba(255,255,255,.22);overflow:hidden;display:none}
   .hero .mini i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--accent2),var(--accent))}
+  /* (partie en cours : le launcher reste ouvert derrière le jeu) */
+  .hero .live{position:absolute;left:22px;top:16px;display:none;align-items:center;gap:7px;padding:6px 11px;border-radius:999px;
+    background:rgba(0,0,0,.5);border:1px solid rgba(255,255,255,.25);color:#fff;font-size:12px;font-weight:700}
+  .hero .live i{width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 8px #34d399}
+  .hero.running .live{display:flex}
+  /* (mise à jour du launcher au clic sur « Lancer ») */
+  .hero .upd{position:absolute;left:22px;right:22px;bottom:98px;font-size:12px;font-weight:700;display:none;
+    color:#fff;text-shadow:0 1px 8px rgba(0,0,0,.85)}
+  .hero.updating .upd{display:block}
+  .hero.updating #heroState{visibility:hidden}
+  .hero.updating #updBar{display:block}
 
   .tick{display:flex;align-items:center;gap:9px;cursor:pointer;margin-top:16px}
   .tick input{width:17px;height:17px;margin:0;accent-color:#22d3ee}
@@ -317,6 +328,9 @@
         <div class="veil"></div>
         <div class="state" id="heroState"></div>
         <div class="mini" id="heroMini"><i></i></div>
+        <div class="upd" id="updState"></div>
+        <div class="mini" id="updBar"><i></i></div>
+        <div class="live" id="gameLive"><i></i>Jeu en cours</div>
         <div class="in">
           <div>
             <h1>BIG STREET</h1>

@@ -49,9 +49,11 @@ export function createScene(S) {
     S.ents.hidden = [...H]; if (!on) show(key); S.touch(); renderTree(true); renderPanel();
   }
   const isHidden = key => S.ents.hidden.includes(key);
+  // (l'identifiant d'un objet du décor est souvent un texte — « p164 » — : pas de conversion en nombre, sinon on ne le retrouve jamais)
+  const idOf = (k, raw) => (k === 'i' && (raw === '' || Number.isNaN(+raw)) ? raw : +raw);
   // (rallumer ce qu'on avait éteint)
   function show(key) {
-    const w = S.world; if (!w || !mine.delete(key)) return; const [k, raw] = key.split(':'), id = +raw;
+    const w = S.world; if (!w || !mine.delete(key)) return; const [k, raw] = key.split(':'), id = idOf(k, raw);
     if (k === 'u') { const a = w.avatars.get(id); if (a) { a.zoneHidden = false; a.group.visible = true; a._tagVis = null; } }
     else if (k === 'v') { const V = w.pvs?.get(id); if (V?.mesh) V.mesh.visible = true; }
     else if (k === 'i') { const m = w.itemMeshes?.get(id); if (m) m.visible = true; }
@@ -60,7 +62,7 @@ export function createScene(S) {
   function tick(now) {
     const w = S.world; if (!w || !S.pb) return;
     for (const key of S.ents.hidden) {
-      const [k, raw] = key.split(':'), id = +raw;
+      const [k, raw] = key.split(':'), id = idOf(k, raw);
       if (k === 'u') { const a = w.avatars.get(id); if (a) { a.zoneHidden = true; if (a.group.visible) a.group.visible = false; mine.add(key); } }
       else if (k === 'v') { const V = w.pvs?.get(id); if (V?.mesh?.visible) { V.mesh.visible = false; mine.add(key); } }
       else if (k === 'i') { const m = w.itemMeshes?.get(id); if (m?.visible) { m.visible = false; w.fogCulled?.delete(m); mine.add(key); } }
@@ -74,9 +76,11 @@ export function createScene(S) {
   // ---------------------------------------------------------------- Où est une entité
   /** { x, y (sol), z, yaw (vers où il regarde, convention des caméras), present } à l'instant t (ms) */
   function posOf(key, t) {
-    const e = byKey(key), w = S.world; if (!w || !S.rec) return null; const [k, raw] = key.split(':'), id = +raw;
+    const e = byKey(key), w = S.world; if (!w || !S.rec) return null; const [k, raw] = key.split(':'), id = idOf(k, raw);
     if (k === 'u' || k === 'v') { const p = S.entPos(k === 'u' ? 'perso' : 'vehicule', id, t); return p ? { ...p, present: !e || (t >= e.t0 && t <= e.t1) } : null; }
-    if (k === 'i') { const m = w.itemMeshes?.get(id); if (m) return { x: m.position.x, y: m.position.y, z: m.position.z, yaw: 0, present: true }; if (e && Number.isFinite(e.x)) { let y = 0; try { y = w.heightAt(e.x, e.y) || 0; } catch { y = 0; } return { x: e.x, y, z: e.y, yaw: 0, present: true }; } }
+    if (k === 'i') { const m = w.itemMeshes?.get(id); if (m) return { x: m.position.x, y: m.position.y, z: m.position.z, yaw: [Math.PI / 2, Math.PI, -Math.PI / 2, 0][Math.round(w.items?.get(id)?.rot || 0) & 3], present: true }; if (e && Number.isFinite(e.x)) {   // (objet dessiné en série, sans maillage à lui : le centre de son emprise, tourné comme il est posé — rot 0 : face au sud)
+        const it = w.items?.get(id), d = SH().FURNI?.[e.type], rot = Math.round(it?.rot || 0), fw = d ? (rot % 2 ? d.d : d.w) || 1 : 1, fd = d ? (rot % 2 ? d.w : d.d) || 1 : 1, cx = e.x + (fw - 1) / 2, cz = e.y + (fd - 1) / 2;
+        let y = 0; try { y = w.heightAt(cx, cz) || 0; } catch { y = 0; } return { x: cx, y, z: cz, yaw: [Math.PI / 2, Math.PI, -Math.PI / 2, 0][rot & 3], present: true }; } }
     return null;
   }
   /** Cadre une entité : la vue libre vient se placer devant elle (ou derrière si un mur gêne) */
@@ -153,6 +157,7 @@ export function createScene(S) {
         e.kind !== 'objet' && S.selCamLast() ? el('button', { class: 'btn small', title: 'Attacher la dernière caméra sélectionnée à cette entité (elle la suivra)', text: `📎 Parent de ${S.selCamLast().name}`, onclick: () => S.setParentOf(S.selCamLast(), e) }) : null)];
     if (sel.kind === 'u') kids.push(...lookEditor(e));
     else kids.push(el('small', { class: 'muted', text: e.kind === 'vehicule' ? 'Un véhicule peut être masqué, cadré, ou servir de parent à une caméra.' : 'Un objet du décor peut être masqué ou cadré.' }));
+    try { kids.push(...(S.entExtra?.(e) || [])); } catch (err) { console.warn('scène : réglages d’animation', err); }   // (position, rotation, clés, poses : anim.js)
     box.replaceChildren(...kids); live();
   }
   // (l'apparence : chaque liste montre tout ; ce que le compte ne possède pas est verrouillé 🔒 — sauf ce que le personnage porte déjà)
@@ -206,6 +211,8 @@ export function createScene(S) {
       return out;
     },
     find(q) { const n = norm(q); if (!n) return null; if (['joueur', 'le joueur', 'moi', 'player', 'me'].includes(n)) return list.find(e => e.me) || null; return list.find(e => e.key === q || String(e.id) === String(q) && e.kind !== 'objet') || list.find(e => norm(e.name) === n) || list.find(e => e.kind !== 'objet' && norm(e.name).includes(n)) || null; },
+    /** La liste des entités refaite (un personnage a été ajouté au record, ou retiré : anim.js), sans rien désélectionner */
+    relist() { if (!S.rec) return; list = listEntities(S.rec, S.pb?.me, SH().FURNI || {}); if (sel && !byKey(sel.key)) sel = null; lastTree = ''; applyEnts(true); renderTree(true); renderPanel(); },
     open() {
       list = listEntities(S.rec, S.pb?.me, SH().FURNI || {}); sel = null; lastTree = ''; mine.clear();
       if (!mark) { mark = el('div', { class: 'sel-mark', text: '▼' }); $('#overlay').append(mark); } mark.style.display = 'none';

@@ -17,18 +17,25 @@
 // Version 2 (jamais publiée telle quelle) : cams[].keys = [{ t, x, y, z, yaw, pitch, roll, fov, ease }] — une clé = tous les paramètres.
 // Version 1 (launcher 1.6.0) : { v: 1, keys: [...] } — une seule suite de clés ; elle devient « Caméra 1 ».
 // Ce module ne touche ni au DOM ni au moteur : il se teste seul (tools/selftest.mjs).
-export const PROJECT_VERSION = 4;
-export const ORIGIN_Y = { perso: 1.5, vehicule: 0.8, camera: 0 };   // (hauteur de l'origine d'un parent au-dessus du sol)
+// Version 5 (21/11) : mêmes caméras ; le projet porte en plus d'autres clés de premier niveau, chacune lue par son module — « anim »
+// (éléments animés façon Mine-Imator : objets.js) … Un projet plus ancien n'en a pas : elles sont vides. Courbes « lineaire »,
+// « rebond », « elastique », « depasse » en plus.
+export const PROJECT_VERSION = 5;
+export const ORIGIN_Y = { perso: 1.5, vehicule: 0.8, camera: 0, objet: 0 };   // (objet : un élément ajouté à la scène — anim.js)   // (hauteur de l'origine d'un parent au-dessus du sol)
 export const CH = ['x', 'y', 'z', 'yaw', 'pitch', 'roll', 'fov'];   // (la pose)
 export const FX_CH = ['vignette', 'grain', 'dof', 'rt'];                  // (les réglages de filtre animables)
 export const PARAMS = [['x', 'Position X'], ['y', 'Position Y'], ['z', 'Position Z'], ['yaw', 'Lacet'], ['pitch', 'Tangage'], ['roll', 'Roulis'], ['fov', 'FOV'],
   ['vignette', 'Vignette'], ['grain', 'Grain'], ['dof', 'Flou de profondeur'], ['rt', 'Raytracing']];
 const ALL = PARAMS.map(p => p[0]);
-export const EASES = { fluide: 'travelling fluide', doux: 'départ et arrivée en douceur', accel: 'accélère', frein: 'ralentit', fixe: 'plan fixe (coupe)' };
+export const EASES = { fluide: 'travelling fluide', doux: 'départ et arrivée en douceur', accel: 'accélère', frein: 'ralentit', lineaire: 'linéaire (vitesse constante)', rebond: 'rebond', elastique: 'élastique', depasse: 'dépasse puis revient', fixe: 'plan fixe (coupe)' };
+const bounce = u => { const n = 7.5625, d = 2.75; if (u < 1 / d) return n * u * u; if (u < 2 / d) return n * (u -= 1.5 / d) * u + 0.75; if (u < 2.5 / d) return n * (u -= 2.25 / d) * u + 0.9375; return n * (u -= 2.625 / d) * u + 0.984375; };
+const DIRECT = { lineaire: u => u, rebond: bounce, elastique: u => (u <= 0 ? 0 : u >= 1 ? 1 : Math.pow(2, -10 * u) * Math.sin((u * 10 - 0.75) * (2 * Math.PI) / 3) + 1), depasse: u => 1 + 2.70158 * Math.pow(u - 1, 3) + 1.70158 * Math.pow(u - 1, 2) };   // (droit d'une clé à l'autre, sans tangentes)
 export const FILTERS = { '': 'Aucun', nuit: 'Vision nocturne', thermique: 'Thermique (chaleur)', nb: 'Noir et blanc', sepia: 'Sépia', cine: 'Cinéma (teal & orange)' };
 export const COLORS = ['#ff8a3d', '#4f8cff', '#3ddc84', '#ff5b8a', '#ffd23d', '#b07cff', '#3dd6d0', '#ff6b4a'];
-const EASE = { fluide: u => u, doux: u => u * u * (3 - 2 * u), accel: u => u * u, frein: u => 1 - (1 - u) * (1 - u), fixe: () => 0 };
-const LIM = { pitch: [-1.55, 1.55], fov: [5, 130], vignette: [0, 1], grain: [0, 1], dof: [0, 1], rt: [0, 1] }, DEF = { fov: 60 };
+const EASE = { fluide: u => u, doux: u => u * u * (3 - 2 * u), accel: u => u * u, frein: u => 1 - (1 - u) * (1 - u), fixe: () => 0, ...DIRECT };
+export const RT_MAX = 3;   // (raytracing : 0–1 pour tous, jusqu'à 3 — « 300 » — pour un compte VIP ; le plafond du compte est appliqué à l'affichage : studio.js)
+export const RT_FINE = ['rtAo', 'rtRad', 'rtBloom', 'rtRefl'];   // (réglages fins du raytracing, fixes par caméra : force et rayon de l'occlusion, halo, reflets — 0 à 2, 1 = normal)
+const LIM = { pitch: [-1.55, 1.55], fov: [5, 130], vignette: [0, 1], grain: [0, 1], dof: [0, 1], rt: [0, RT_MAX] }, DEF = { fov: 60 };
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const num = (v, d = 0) => (Number.isFinite(+v) ? +v : d);
 const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
@@ -48,15 +55,15 @@ let seq = 0;
 export function newCam(list, pose = null, t = 0) {
   const n = list.length + 1; let name = `Caméra ${n}`; for (let i = n; list.some(c => c.name === name); i++) name = `Caméra ${i + 1}`;
   const cam = { id: `c${Date.now().toString(36)}${(seq++).toString(36)}`, name, color: COLORS[list.length % COLORS.length], on: true, open: true, filter: '', vignette: 0, grain: 0, dof: 0, rt: 0, shadow: false,
-    parent: null, follow: false, look: false, tracks: emptyTracks() };
+    parent: null, follow: false, look: false, pov: false, rtAo: 1, rtRad: 1, rtBloom: 1, rtRefl: 1, tracks: emptyTracks() };
   if (pose) for (const ch of CH) cam.tracks[ch].push(cleanK(ch, { t, v: pose[ch] }));
   return cam;
 }
 function cleanCam(c, i, ver = PROJECT_VERSION) {
-  const P = c.parent && ['perso', 'vehicule', 'camera'].includes(c.parent.kind) && c.parent.id != null ? { kind: c.parent.kind, id: c.parent.id, name: String(c.parent.name || '').slice(0, 60) } : null;
+  const P = c.parent && ['perso', 'vehicule', 'camera', 'objet'].includes(c.parent.kind) && c.parent.id != null ? { kind: c.parent.kind, id: c.parent.id, name: String(c.parent.name || '').slice(0, 60) } : null;
   const cam = { id: String(c.id || `c${i}`), name: String(c.name || `Caméra ${i + 1}`).slice(0, 40), color: /^#[0-9a-f]{6}$/i.test(c.color) ? c.color : COLORS[i % COLORS.length], on: c.on !== false, open: !!c.open,
-    filter: c.filter in FILTERS ? c.filter : '', vignette: clamp(num(c.vignette), 0, 1), grain: clamp(num(c.grain), 0, 1), dof: clamp(num(c.dof), 0, 1), rt: clamp(num(c.rt), 0, 1), shadow: !!c.shadow,
-    parent: P, follow: !!c.follow, look: !!c.look, tracks: emptyTracks() };
+    filter: c.filter in FILTERS ? c.filter : '', vignette: clamp(num(c.vignette), 0, 1), grain: clamp(num(c.grain), 0, 1), dof: clamp(num(c.dof), 0, 1), rt: clamp(num(c.rt), 0, RT_MAX), shadow: !!c.shadow,
+    parent: P, follow: !!c.follow, look: !!c.look, pov: !!c.pov && P?.kind === 'perso', ...Object.fromEntries(RT_FINE.map(k => [k, clamp(num(c[k], 1), 0, 2)])), tracks: emptyTracks() };
   if (c.tracks && typeof c.tracks === 'object') {
     for (const ch of ALL) if (Array.isArray(c.tracks[ch])) cam.tracks[ch] = c.tracks[ch].filter(k => k && Number.isFinite(+k.t) && Number.isFinite(+k.v)).map(k => cleanK(ch, k));
   } else if (Array.isArray(c.keys)) {   // (versions 1 et 2 : une clé portait tous les paramètres — elle devient une clé sur chaque piste)
@@ -91,7 +98,8 @@ export function loadProject(pj) {
   if (Array.isArray(pj.keys) && pj.keys.length) return { rate, ents, cams: [cleanCam({ id: 'c1', name: 'Caméra 1', keys: pj.keys }, 0, ver)] };   // (version 1)
   return { rate, cams: [], ents };
 }
-export const saveProject = (record, rate, cams, ents = null) => JSON.stringify({ v: PROJECT_VERSION, record, rate, cams, ents: cleanEnts(ents) });
+/** extra : les autres parties du projet, déjà nettoyées par leur module ({ anim: … }) — écrites telles quelles à côté des caméras */
+export const saveProject = (record, rate, cams, ents = null, extra = null) => JSON.stringify({ v: PROJECT_VERSION, record, rate, cams, ents: cleanEnts(ents), ...(extra || {}) });
 
 // ---------------------------------------------------------------- Images-clés
 /** Indice de la clé d'une piste à l'instant t (à TOL près), ou −1. */
@@ -153,8 +161,9 @@ export function valAt(L, t, def = 0) {
   if (t <= L[0].t) return L[0].v; if (t >= L[n - 1].t) return L[n - 1].v;
   let i = 0; while (i + 1 < n && L[i + 1].t <= t) i++;
   const a = L[i], b = L[i + 1]; if (a.ease === 'fixe' || b.t - a.t < 1) return a.v;
-  const D = b.t - a.t, u = (EASE[a.ease] || EASE.fluide)((t - a.t) / D);
-  const p = i > 0 && L[i - 1].ease !== 'fixe' ? L[i - 1] : null, q = i + 2 < n && b.ease !== 'fixe' ? L[i + 2] : null;
+  const D = b.t - a.t; if (DIRECT[a.ease]) return a.v + (b.v - a.v) * DIRECT[a.ease]((t - a.t) / D);
+  const u = (EASE[a.ease] || EASE.fluide)((t - a.t) / D), cut = k => k.ease === 'fixe' || !!DIRECT[k.ease];
+  const p = i > 0 && !cut(L[i - 1]) ? L[i - 1] : null, q = i + 2 < n && !cut(b) ? L[i + 2] : null;
   const ma = p ? (b.v - p.v) / (b.t - p.t) * D : b.v - a.v, mb = q ? (q.v - a.v) / (q.t - a.t) * D : b.v - a.v;
   const u2 = u * u, u3 = u2 * u;
   return (2 * u3 - 3 * u2 + 1) * a.v + (u3 - 2 * u2 + u) * ma + (-2 * u3 + 3 * u2) * b.v + (u3 - u2) * mb;
@@ -167,7 +176,8 @@ export function poseAt(cam, t) {
 }
 /** Le filtre d'une caméra à l'instant t : { filter, shadow, vignette, grain, dof, rt } (piste si elle a des clés, sinon la valeur fixe). */
 export function fxAt(cam, t) {
-  const o = { filter: cam.filter, shadow: !!cam.shadow }; for (const ch of FX_CH) o[ch] = cam.tracks[ch].length ? clamp(valAt(cam.tracks[ch], t), 0, 1) : cam[ch];
+  const o = { filter: cam.filter, shadow: !!cam.shadow }; for (const ch of FX_CH) o[ch] = cam.tracks[ch].length ? clamp(valAt(cam.tracks[ch], t), 0, ch === 'rt' ? RT_MAX : 1) : cam[ch];
+  for (const k of RT_FINE) o[k] = cam[k] ?? 1;
   return o;
 }
 /** Première et dernière clé de pose d'une caméra, ou null. */
@@ -211,6 +221,8 @@ export function parentFrame(cam, t, cams, frame, depth = 0) {
 export function worldPose(cam, t, cams, frame, depth = 0) {
   const L = poseAt(cam, t); if (!L) return null;
   const P = parentFrame(cam, t, cams, frame, depth), lost = !!cam.parent && !P;
+  // (vue subjective : la caméra EST les yeux de son parent — sa position et son regard viennent du record : P.eye, donné par frame())
+  if (cam.pov && P?.eye) return { x: P.eye.x, y: P.eye.y, z: P.eye.z, yaw: P.eye.yaw + L.yaw, pitch: clamp(P.eye.pitch + L.pitch, -1.55, 1.55), roll: L.roll, fov: L.fov, P, lost, pov: true };
   let Wd = toWorld(L, P, cam.follow);
   if (P && cam.look) Wd = lookAt(Wd, { x: P.x, y: P.y - (cam.parent.kind === 'perso' ? 0.12 : 0), z: P.z });   // (un personnage : son visage)
   return { x: Wd.x, y: Wd.y, z: Wd.z, yaw: Wd.yaw, pitch: Wd.pitch, roll: Wd.roll, fov: Wd.fov, P, lost };

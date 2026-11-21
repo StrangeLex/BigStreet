@@ -5,7 +5,7 @@
  *   octets 8–9    version du format (entier 16 bits, petit-boutiste) — 1
  *   octets 10–11  drapeaux — bit 0 : record terminé proprement (en-tête définitif)
  *   octets 12–15  longueur, en octets, de la fiche JSON qui suit (entier 32 bits)
- *   octets 16–…   fiche JSON (UTF-8) : date, lieu, durée, rayon, version du jeu… ; le bloc d'en-tête fait
+ *   octets 16–…   fiche JSON (UTF-8) : identifiant unique (id, UUID), date, lieu, durée, rayon, version du jeu… ; le bloc d'en-tête fait
  *                 toujours 4096 octets (complété par des zéros) : il se réécrit à la fin sans toucher au reste
  *   octet 4096 →  flux gzip : une ligne JSON par trame (images-clés et événements horodatés, cf. le jeu,
  *                 public/js/studio-rec.js), vidé à chaque morceau — un record coupé net reste lisible
@@ -15,6 +15,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const zlib = require('node:zlib');
+const crypto = require('node:crypto');
 
 const MAGIC = Buffer.from('BIGSTREC', 'ascii');
 const VERSION = 1;
@@ -25,6 +26,8 @@ const MAX_RAW = 400 * 1048576;        // (texte brut d'un record, avant compress
 const MAX_CHUNK = 4 * 1048576;        // (un morceau envoyé par la page)
 const MAX_MS = 30 * 60000;            // (durée d'un record)
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.bsrec$/;
+// (identifiant unique d'un record : un UUID, écrit dans l'en-tête à la création et jamais changé — cf. recordId)
+const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 const str = (v, n) => String(v ?? '').replace(/[\u0000-\u001f]/g, ' ').slice(0, n);
 const num = (v, lo, hi, d = 0) => { const x = Number(v); return Number.isFinite(x) ? Math.max(lo, Math.min(hi, x)) : d; };
@@ -86,7 +89,7 @@ function measure(text) {
  */
 function createWriter(file, meta, { minMs = 1500 } = {}) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const head = { ...cleanMeta(meta), v: VERSION, date: new Date().toISOString(), dur: 0, lines: 0 };
+  const head = { ...cleanMeta(meta), id: crypto.randomUUID(), v: VERSION, date: new Date().toISOString(), dur: 0, lines: 0 };
   fs.writeFileSync(file, headerBlock(head, false));
   const out = fs.createWriteStream(file, { flags: 'r+', start: HEADER_SIZE });
   const gz = zlib.createGzip({ level: 6 });
@@ -94,7 +97,7 @@ function createWriter(file, meta, { minMs = 1500 } = {}) {
   let raw = 0, closed = null; const t0 = Date.now();
   out.on('error', () => {}); gz.on('error', () => {});
   return {
-    file, t0, get raw() { return raw; }, get closed() { return !!closed; },
+    file, t0, id: head.id, get raw() { return raw; }, get closed() { return !!closed; },
     /** false : refusé (trop gros, record fermé) */
     write(text) {
       if (closed || typeof text !== 'string' || !text.length || text.length > MAX_CHUNK) return false;
@@ -135,6 +138,29 @@ function repair(file) {
   } catch { return h; }
 }
 
+/** L'identifiant tiré du contenu d'un record d'avant les identifiants (launcher < 1.8) : l'empreinte de ses trames — les octets après
+ *  l'en-tête, qui ne changent plus une fois le record terminé —, mise en forme d'UUID (version 8, « sur mesure »). */
+function contentId(file) {
+  const h = crypto.createHash('sha256'), fd = fs.openSync(file, 'r'), b = Buffer.alloc(1 << 20);
+  try { for (let pos = HEADER_SIZE, n; (n = fs.readSync(fd, b, 0, b.length, pos)) > 0; pos += n) h.update(b.subarray(0, n)); } finally { fs.closeSync(fd); }
+  const x = h.digest('hex');
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-8${x.slice(13, 16)}-${((parseInt(x[16], 16) & 3) | 8).toString(16)}${x.slice(17, 20)}-${x.slice(20, 32)}`;
+}
+/**
+ * L'identifiant unique d'un record terminé : celui de son en-tête ; sinon (ancien record) celui tiré de son contenu, écrit alors dans
+ * l'en-tête pour ne plus être recalculé. Rend l'identifiant, ou null (pas un record, ou record encore ouvert).
+ */
+function recordId(file, h = readHeader(file)) {
+  if (!h) return null;
+  if (ID_RE.test(h.meta?.id || '')) return h.meta.id;
+  if (!h.done) return null;
+  try {
+    const id = contentId(file), fd = fs.openSync(file, 'r+');
+    try { fs.writeSync(fd, headerBlock({ ...h.meta, id }, true), 0, HEADER_SIZE, 0); } finally { fs.closeSync(fd); }
+    return id;
+  } catch { return null; }
+}
+
 /** Les records d'un dossier, du plus récent au plus ancien (skip : fichier en cours d'écriture). */
 function list(dir, skip = null) {
   let names = [];
@@ -145,7 +171,8 @@ function list(dir, skip = null) {
     let st; try { st = fs.statSync(file); } catch { continue; }
     let h = readHeader(file); if (!h) continue;
     if (!h.done && Date.now() - st.mtimeMs > 5000) h = repair(file) || h;
-    out.push({ name, size: st.size, mtime: st.mtimeMs, done: h.done, project: fs.existsSync(projectFile(file)), ...h.meta });
+    const id = recordId(file, h);
+    out.push({ name, size: st.size, mtime: st.mtimeMs, done: h.done, project: fs.existsSync(projectFile(file)), ...h.meta, id });
   }
   return out.sort((a, b) => String(b.date).localeCompare(String(a.date)));
 }
@@ -166,5 +193,5 @@ function fileName(meta, now = new Date()) {
   return `${d}_${room}${EXT}`;
 }
 
-module.exports = { MAGIC, VERSION, HEADER_SIZE, EXT, PROJECT_EXT, MAX_RAW, MAX_CHUNK, MAX_MS, NAME_RE,
-  cleanMeta, readHeader, readBody, measure, createWriter, repair, list, safeFile, projectFile, fileName };
+module.exports = { MAGIC, VERSION, HEADER_SIZE, EXT, PROJECT_EXT, MAX_RAW, MAX_CHUNK, MAX_MS, NAME_RE, ID_RE,
+  cleanMeta, readHeader, readBody, measure, createWriter, repair, list, safeFile, projectFile, fileName, recordId, contentId };

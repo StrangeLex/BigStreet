@@ -20,7 +20,7 @@ float ign(vec2 p) { return fract(52.9829189 * fract(dot(p, vec2(0.06711056, 0.00
 `;
 // Lumière : R = occlusion ambiante (1 = aucune), G = ombre portée (1 = éclairé) — à demi-définition
 const LIGHT = COMMON + `
-uniform vec2 res; uniform float aoK, shK, shBias, shTexel; uniform sampler2D tShadow; uniform mat4 shadowVP; uniform vec3 lightDir; uniform mat4 proj;
+uniform vec2 res; uniform float aoK, aoRad, aoN, shK, shBias, shTexel; uniform sampler2D tShadow; uniform mat4 shadowVP; uniform vec3 lightDir; uniform mat4 proj;
 void main() {
   float d0 = texture2D(tDepth, vUv).x; if (d0 >= 0.99999) { gl_FragColor = vec4(1.0); return; }
   vec3 P = viewPos(vUv);
@@ -30,13 +30,15 @@ void main() {
   vec3 N = normalize(cross(abs(r.z) < abs(l.z) ? r : l, abs(u.z) < abs(dn.z) ? u : dn));
   float ao = 1.0;
   if (aoK > 0.001) {
-    float radius = 0.55, rpx = radius * proj[1][1] * 0.5 / max(0.2, -P.z), occ = 0.0, a0 = ign(gl_FragCoord.xy) * 6.2831853;
-    for (int i = 0; i < 12; i++) {
-      float fi = float(i), a = a0 + fi * 2.39996323, k = sqrt((fi + 0.5) / 12.0);
+    // (rayon et nombre de points réglables : 12 points jusqu'à 100, jusqu'à 28 au-delà — raytracing VIP — pour une occlusion plus fine)
+    float radius = 0.55 * aoRad, rpx = radius * proj[1][1] * 0.5 / max(0.2, -P.z), occ = 0.0, a0 = ign(gl_FragCoord.xy) * 6.2831853;
+    for (int i = 0; i < 28; i++) {
+      float fi = float(i); if (fi >= aoN) break;
+      float a = a0 + fi * 2.39996323, k = sqrt((fi + 0.5) / aoN);
       vec3 v = viewPos(vUv + vec2(cos(a) * res.y / res.x, sin(a)) * rpx * k) - P; float len2 = dot(v, v);
       occ += max(0.0, dot(N, v) / sqrt(len2 + 1e-5) - 0.12) / (1.0 + len2 / (radius * radius) * 3.0);
     }
-    ao = clamp(1.0 - occ / 12.0 * 2.2 * aoK, 0.0, 1.0);
+    ao = clamp(1.0 - occ / aoN * 2.2 * aoK, 0.0, 1.0);
   }
   float sh = 1.0;
   if (shK > 0.001) {
@@ -62,7 +64,7 @@ void main() { vec3 c = vec3(0.0); for (int i = 0; i < 4; i++) { vec2 o = vec2(i 
 const BLUR = `precision highp float; varying vec2 vUv; uniform sampler2D tSrc; uniform vec2 dir;
 void main() { vec3 c = texture2D(tSrc, vUv).rgb * 0.227; c += (texture2D(tSrc, vUv + dir * 1.385).rgb + texture2D(tSrc, vUv - dir * 1.385).rgb) * 0.316; c += (texture2D(tSrc, vUv + dir * 3.231).rgb + texture2D(tSrc, vUv - dir * 3.231).rgb) * 0.070; gl_FragColor = vec4(c, 1.0); }`;
 const FRAG = COMMON + `
-uniform sampler2D tScene, tMask, tLight, tBloom; uniform vec2 res; uniform mat4 proj; uniform float time, vignette, grain, dof, focus, rt, shK, lightOn; uniform vec3 shTint; uniform int mode;
+uniform sampler2D tScene, tMask, tLight, tBloom; uniform vec2 res; uniform mat4 proj; uniform float time, vignette, grain, dof, focus, rt, rtX, bloomK, reflK, shK, lightOn; uniform vec3 shTint; uniform int mode;
 vec3 toSRGB(vec3 c) { c = clamp(c, 0.0, 1.0); return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 float hash(vec2 p) { return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 // (palette « fer » des caméras thermiques : noir, violet, rouge, orange, jaune, blanc)
@@ -102,19 +104,20 @@ void main() {
     L /= 9.0;
     float d0 = texture2D(tDepth, vUv).x;
     if (d0 < 0.99999) {
-      if (rt > 0.3) {   // (reflets : sur ce qui est à plat — sols, tables —, plus marqués en vue rasante)
+      if (rt > 0.3 && reflK > 0.001) {   // (reflets : sur ce qui est à plat — sols, tables —, plus marqués en vue rasante)
         vec3 P = viewPos(vUv); vec2 q = 1.0 / res;
         vec3 N = normalize(cross(viewPos(vUv + vec2(q.x, 0.0)) - P, viewPos(vUv + vec2(0.0, q.y)) - P));
         vec3 Nw = normalize((camWorld * vec4(N, 0.0)).xyz);
-        if (Nw.y > 0.93) { vec4 r = reflection(P, N); float fres = pow(1.0 - max(0.0, dot(-normalize(P), N)), 3.0); c = mix(c, r.rgb, r.a * (0.06 + 0.5 * fres) * (rt - 0.3) / 0.7); }
+        if (Nw.y > 0.93) { vec4 r = reflection(P, N); float fres = pow(1.0 - max(0.0, dot(-normalize(P), N)), 3.0); c = mix(c, r.rgb, min(0.92, r.a * (0.06 + 0.5 * fres) * (rt - 0.3) / 0.7 * reflK)); }
       }
       c *= mix(vec3(1.0), shTint, (1.0 - L.y) * shK);
       c *= L.x;
     }
     if (rt > 0.001) {
-      c += texture2D(tBloom, vUv).rgb * (0.35 + 0.9 * rt) * rt;
-      float l0 = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(l0), c, 1.0 + 0.14 * rt);   // (couleurs un peu plus denses)
-      c = mix(c, c * c * (3.0 - 2.0 * c) * 1.04, 0.22 * rt * step(l0, 1.0));
+      // (rt : 0 → 1, la part « jusqu'à 100 » ; rtX : 0 → 1, la part au-delà — raytracing VIP, jusqu'à 300 : dosée à part pour ne rien brûler)
+      c += texture2D(tBloom, vUv).rgb * (0.35 + 0.9 * rt) * rt * bloomK;
+      float l0 = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(l0), c, 1.0 + 0.14 * rt + 0.10 * rtX);   // (couleurs un peu plus denses)
+      c = mix(c, c * c * (3.0 - 2.0 * c) * 1.04, (0.22 * rt + 0.16 * rtX) * step(l0, 1.0));
     }
   }
   c = toSRGB(c);
@@ -151,8 +154,8 @@ export function createFX(THREE, world) {
   const M4 = () => new THREE.Matrix4();
   const camU = { tDepth: { value: depth }, projInv: { value: M4() }, camWorld: { value: M4() }, proj: { value: M4() }, near: { value: 0.05 }, far: { value: 400 } };
   const U = { ...camU, tScene: { value: rt.texture }, tMask: { value: mask.texture }, tLight: { value: light.texture }, tBloom: { value: bloomA.texture }, res: { value: new THREE.Vector2(2, 2) }, time: { value: 0 },
-    vignette: { value: 0 }, grain: { value: 0 }, dof: { value: 0 }, focus: { value: 12 }, mode: { value: 0 }, rt: { value: 0 }, shK: { value: 0 }, lightOn: { value: 0 }, shTint: { value: new THREE.Color(0.34, 0.38, 0.5) } };
-  const UL = { ...camU, res: { value: new THREE.Vector2(2, 2) }, aoK: { value: 0 }, shK: { value: 0 }, shBias: { value: 0.05 }, shTexel: { value: 1 / SHADOW_SIZE }, tShadow: { value: null }, shadowVP: { value: M4() }, lightDir: { value: new THREE.Vector3(0, 1, 0) } };
+    vignette: { value: 0 }, grain: { value: 0 }, dof: { value: 0 }, focus: { value: 12 }, mode: { value: 0 }, rt: { value: 0 }, rtX: { value: 0 }, bloomK: { value: 1 }, reflK: { value: 1 }, shK: { value: 0 }, lightOn: { value: 0 }, shTint: { value: new THREE.Color(0.34, 0.38, 0.5) } };
+  const UL = { ...camU, res: { value: new THREE.Vector2(2, 2) }, aoK: { value: 0 }, aoRad: { value: 1 }, aoN: { value: 12 }, shK: { value: 0 }, shBias: { value: 0.05 }, shTexel: { value: 1 / SHADOW_SIZE }, tShadow: { value: null }, shadowVP: { value: M4() }, lightDir: { value: new THREE.Vector3(0, 1, 0) } };
   const UB = { tScene: { value: rt.texture }, px: { value: new THREE.Vector2() }, thr: { value: 0.8 } }, UG = { tSrc: { value: null }, dir: { value: new THREE.Vector2() } };
   const mat = (frag, uniforms) => new THREE.ShaderMaterial({ vertexShader: VERT, fragmentShader: frag, uniforms, depthTest: false, depthWrite: false, toneMapped: false, fog: false });
   const mFinal = mat(FRAG, U), mLight = mat(LIGHT, UL), mBright = mat(BRIGHT, UB), mBlur = mat(BLUR, UG);
@@ -231,7 +234,10 @@ export function createFX(THREE, world) {
       if (rt.width !== w || rt.height !== h) { rt.setSize(w, h); mask.setSize(w, h); light.setSize(hw, hh); bloomA.setSize(qw, qh); bloomB.setSize(qw, qh); }
       const prev = out ? out.target : renderer.getRenderTarget();
       renderer.setRenderTarget(rt); renderer.render(scene, cam);
-      const mode = MODES[cfg.filter] || 0, rtK = Math.max(0, Math.min(1, cfg.rt || 0));
+      // (raytracing : rtK = la part 0 → 1 — « jusqu'à 100 », le rendu de toujours — ; rtX = la part au-delà, 0 → 1 pour 100 → 300 (compte VIP :
+      // le plafond est appliqué par studio.js) ; réglages fins de la caméra : force et rayon de l'occlusion, halo, reflets — 1 = normal)
+      const mode = MODES[cfg.filter] || 0, rtAll = Math.max(0, Math.min(3, cfg.rt || 0)), rtK = Math.min(1, rtAll), rtX = Math.max(0, rtAll - 1) / 2;
+      const fine = k => (Number.isFinite(cfg[k]) ? Math.max(0, Math.min(2, cfg[k])) : 1), fAo = fine('rtAo'), fRad = fine('rtRad'), fBloom = fine('rtBloom'), fRefl = fine('rtRefl');
       if (mode === 2) {
         const bg = scene.background, ov = scene.overrideMaterial, auto = renderer.autoClear, a0 = renderer.getClearAlpha(); renderer.getClearColor(clear);
         scene.background = null; renderer.setClearColor(0x000000, 1);
@@ -246,18 +252,18 @@ export function createFX(THREE, world) {
       const lit = rtK > 0.004 || shK > 0;
       camU.projInv.value.copy(cam.projectionMatrixInverse); camU.camWorld.value.copy(cam.matrixWorld); camU.proj.value.copy(cam.projectionMatrix); camU.near.value = cam.near; camU.far.value = cam.far;
       if (lit) {
-        UL.res.value.set(hw, hh); UL.aoK.value = Math.min(1, rtK * 1.25); UL.shK.value = shK;
+        UL.res.value.set(hw, hh); UL.aoK.value = Math.min(1, rtK * 1.25) * (1 + 0.85 * rtX) * fAo; UL.aoRad.value = (1 + 0.9 * rtX) * Math.max(0.15, fRad); UL.aoN.value = Math.round(12 + 16 * rtX); UL.shK.value = shK;
         pass(renderer, mLight, light);
-        if (rtK > 0.004) {   // (halo : seuil plus bas quand la valeur monte, deux étalements successifs)
-          UB.px.value.set(1 / w, 1 / h); UB.thr.value = 0.95 - 0.35 * rtK; pass(renderer, mBright, bloomA);
-          for (const k of [1, 2.2]) { UG.tSrc.value = bloomA.texture; UG.dir.value.set(k / qw, 0); pass(renderer, mBlur, bloomB); UG.tSrc.value = bloomB.texture; UG.dir.value.set(0, k / qh); pass(renderer, mBlur, bloomA); }
+        if (rtK > 0.004 && fBloom > 0.001) {   // (halo : seuil plus bas quand la valeur monte, deux étalements successifs — un troisième, plus large, au-delà de 100)
+          UB.px.value.set(1 / w, 1 / h); UB.thr.value = 0.95 - 0.35 * rtK - 0.18 * rtX; pass(renderer, mBright, bloomA);
+          for (const k of rtX > 0.05 ? [1, 2.2, 4.2] : [1, 2.2]) { UG.tSrc.value = bloomA.texture; UG.dir.value.set(k / qw, 0); pass(renderer, mBlur, bloomB); UG.tSrc.value = bloomB.texture; UG.dir.value.set(0, k / qh); pass(renderer, mBlur, bloomA); }
         }
       }
       U.res.value.set(w, h); U.time.value = (Date.now() % 100000) / 1000; U.mode.value = mode;
       U.vignette.value = cfg.vignette || 0; U.grain.value = cfg.grain || 0; U.dof.value = cfg.dof || 0; U.focus.value = Math.max(0.5, fx.focus);
-      U.rt.value = rtK; U.shK.value = shK; U.lightOn.value = lit ? 1 : 0;
+      U.rt.value = rtK; U.rtX.value = rtX; U.bloomK.value = fBloom * (1 + 1.1 * rtX); U.reflK.value = fRefl * (1 + 1.6 * rtX); U.shK.value = shK; U.lightOn.value = lit ? 1 : 0;
       pass(renderer, mFinal, prev);
-      fx.last = { rt: rtK, shadow: shK };
+      fx.last = { rt: rtAll, shadow: shK, ao: UL.aoK.value, points: UL.aoN.value };
       if (fx.probe) { const b = new Uint8Array(hw * hh * 4); renderer.readRenderTargetPixels(light, 0, 0, hw, hh, b); let ao = 0, sh = 0, mn = 255; for (let i = 0; i < b.length; i += 4) { ao += b[i]; sh += b[i + 1]; mn = Math.min(mn, b[i + 1]); } fx.probe = false; fx.probed = { occlusion: +(ao / (b.length / 4) / 255).toFixed(3), eclaire: +(sh / (b.length / 4) / 255).toFixed(3), ombreMin: mn }; renderer.setRenderTarget(prev); }   // (essais : part de l'image éclairée)
     },
     dispose() { for (const t of [rt, mask, light, bloomA, bloomB, shadow]) t?.dispose(); depth.dispose(); quad.geometry.dispose(); for (const m of [mFinal, mLight, mBright, mBlur, COLD, HOT, DEPTH]) m.dispose(); },

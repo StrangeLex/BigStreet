@@ -28,7 +28,14 @@ contextBridge.exposeInMainWorld('bs', {
   onAuth: cb => ipcRenderer.on('bs:auth', (_e, payload) => cb(payload)),
 
   currentAccount: () => ipcRenderer.invoke('bs:account'),
-  play: () => ipcRenderer.invoke('bs:play'),
+  play: opts => ipcRenderer.invoke('bs:play', opts && opts.afterUpdate ? { afterUpdate: true } : undefined),
+  // Le jeu tourne-t-il ? (« Jeu en cours » / « Revenir au jeu ») ; le launcher reste ouvert pendant la partie.
+  gameState: () => ipcRenderer.invoke('bs:game-state'),
+  onGameState: cb => ipcRenderer.on('bs:game-state', (_e, s) => cb(s)),
+  // Mise à jour du launcher faite au clic sur « Lancer » : progression, puis relance ; autoPlay() dit (une fois)
+  // si la page doit ouvrir le jeu toute seule après cette relance.
+  onUpdate: cb => ipcRenderer.on('bs:update', (_e, s) => cb(s)),
+  autoPlay: () => ipcRenderer.invoke('bs:autoplay'),
 
   notes: () => ipcRenderer.invoke('bs:notes'),
   settings: () => ipcRenderer.invoke('bs:settings'),

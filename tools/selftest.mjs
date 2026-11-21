@@ -46,7 +46,7 @@ function checkMarkup() {
   const inline = html.match(/\son[a-z]+="/g) || [];
   ok('aucun gestionnaire en dur (CSP)', inline.length === 0, inline.join(' '));
   // (le Studio : mêmes contrôles sur sa page)
-  const sHtml = readFileSync(path.join(root, 'src/studio/studio.html'), 'utf8'), sJs = ['studio.js', 'cams.js', 'fx.js', 'gizmo.js', 'pip.js', 'scene.js', 'ents.js', 'ai.js', 'ai-tools.js'].map(f => readFileSync(path.join(root, 'src/studio', f), 'utf8')).join('\n');
+  const sHtml = readFileSync(path.join(root, 'src/studio/studio.html'), 'utf8'), sJs = ['studio.js', 'cams.js', 'fx.js', 'gizmo.js', 'pip.js', 'scene.js', 'ents.js', 'ai.js', 'ai-tools.js', 'anim.js'].map(f => readFileSync(path.join(root, 'src/studio', f), 'utf8')).join('\n');
   const sIn = new Set([...sHtml.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
   const sMiss = [...new Set([...sJs.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)/g)].map(m => m[1]))].filter(i => !sIn.has(i));
   ok('identifiants du Studio', sMiss.length === 0, sMiss.join(', '));
@@ -80,7 +80,7 @@ async function checkCams() {
   a.vignette = 0.3; const f0 = C.fxAt(a, 1000).vignette; C.setKey(a, 'vignette', 0, 0); C.setKey(a, 'vignette', 2000, 1);
   ok('réglage de filtre : fixe, puis animé par ses clés', f0 === 0.3 && near(C.fxAt(a, 1000).vignette, 0.5));
   const back = JSON.parse(C.saveProject('x.bsrec', 1, cams)), re = C.loadProject(back);
-  ok('projet version 3 écrit et relu', back.v === 4 && re.cams[0].id === a.id && re.cams[0].tracks.vignette.length === 2 && re.cams[0].tracks.x.length === 2);
+  ok('projet écrit et relu', back.v === C.PROJECT_VERSION && re.cams[0].id === a.id && re.cams[0].tracks.vignette.length === 2 && re.cams[0].tracks.x.length === 2);
   // parent : aller-retour monde ↔ local, la caméra suit, regarde
   const P = { x: 100, y: 5, z: -20, yaw: 1.1 }, W = { x: 103, y: 7, z: -18, yaw: 0.4, pitch: -0.2, roll: 0.1, fov: 55 };
   for (const follow of [false, true]) { const r = C.toWorld(C.toLocal(W, P, follow), P, follow); ok(`parent : aller-retour ${follow ? 'avec' : 'sans'} rotation`, C.CH.every(c => near(r[c], W[c]))); }
@@ -190,7 +190,7 @@ async function checkAI(C, { E, L, rec }) {
   const history = [], snap0 = JSON.stringify({ cams: st.cams, ents: st.ents }), events = [];
   const res = await A.runTurn(H, history, 'Fais-moi une belle cinématique.', ask, ev => events.push(ev));
   const cam = nm => st.cams.find(c => c.name === nm), wide = cam('Plan large'), close = cam('Gros plan'), tour = cam('Tour');
-  ok('assistant : boucle outils → résultats → modèle', n === 4 && !res.error && res.changed && res.text.startsWith('Trois plans') && res.actions.length === 17 && seen[0].messages[0].role === 'system' && seen[0].messages[1].content.includes('[État du Studio]') && seen[0].messages[1].content.includes('"joueur":{"id":1') && seen[1].messages.filter(m => m.role === 'tool').length === 4 && seen[0].tools.length === schemas.length);
+  ok('assistant : boucle outils → résultats → modèle', n === 4 && !res.error && res.changed && res.text.startsWith('Trois plans') && res.actions.length === 17 && seen[0].messages[0].role === 'system' && seen[0].messages[1].content.includes('[État du Studio]') && seen[0].messages[1].content.includes('"joueur":{"id":1') && seen[1].messages.filter(m => m.role === 'tool').length === 4 && seen[0].tools.length < schemas.length && ['frame_shot', 'set_keys', 'list_tool_groups'].every(k => seen[0].tools.some(t => t.function.name === k)) && seen[2].tools.some(t => t.function.name === 'set_appearance'));   // (familles d'outils à la demande : « apparence » fermée au départ, ouverte dès qu'un de ses outils a servi)
   const path0 = JSON.parse(history.find(m => m.role === 'tool' && m.content.includes('parcouru_m')).content);
   ok('assistant : il voit les entités, leurs trajectoires et les événements', path0.parcouru_m === 10 && path0.points[0].x === 10 && path0.points.at(-1).x === 20 && history.some(m => m.role === 'tool' && m.content.includes('Salut !')) && history.some(m => m.role === 'tool' && m.content.includes('"vitesse_m_s":1')));
   const w0 = wide && C.worldPose(wide, 0, st.cams, frame), w4 = wide && C.worldPose(wide, 4000, st.cams, frame);
@@ -334,8 +334,11 @@ async function checkRuntime() {
         ok('Studio : interface servie en local', r[0] === 1 && r[1] === 'function');
         ok('Studio : moteur du jeu par le relais', r[2] === 200, `état ${r[2]}`);
         ok('Studio : reste du site fermé', r[3] !== 200 && r[4] !== 200 && r[5] !== 200 && r[6] !== 200, r.slice(3).join(' '));
+        await (await import('./selftest-export.mjs')).checkExportRuntime(ok, w);   // (export WebM / MP4 : WebCodecs dans la page)
       } finally { w.destroy(); }
     }
+
+    await checkShell(m);
 
     // (migration vers un autre dossier : tout arrive, vérifié, et l'ancienne copie disparaît)
     const dest = mkdtempSync(path.join(os.tmpdir(), 'bs-migre-'));
@@ -358,9 +361,71 @@ async function checkRuntime() {
   }
 }
 
+// ---------------------------------------------------------------- 11 : coquille du launcher (jeu, quitter, mise à jour au clic)
+// Le vrai launcher et la vraie fenêtre de jeu : le launcher reste ouvert pendant la partie (« Revenir au jeu »), le bouton ⏻
+// du jeu (__bsQuit) ferme le jeu seulement, et la mise à jour au clic sur « Lancer » est pilotée par un faux updater.
+// BS_SHOT=<fichier.png> : capture du launcher pendant que le jeu tourne.
+async function checkShell(m) {
+  const wait = async (cond, ms = 40000) => { const t0 = Date.now(); while (!cond()) { if (Date.now() - t0 > ms) return false; await new Promise(r => setTimeout(r, 100)); } return true; };
+  m.createLauncher();
+  const L = () => m.windows().launcher;
+  ok('launcher : fenêtre affichée', await wait(() => L()?.isVisible()));
+  await m.openGame();
+  ok('jeu ouvert, launcher toujours ouvert', await wait(() => m.windows().game?.isVisible()) && L()?.isVisible() && !L().isDestroyed());
+  await new Promise(r => setTimeout(r, 300));
+  const ui = () => L().webContents.executeJavaScript(`({ t: document.querySelector('#play').textContent, run: document.querySelector('#playBox').classList.contains('running') })`);
+  const u1 = await ui();
+  ok('launcher : « Revenir au jeu » pendant la partie', u1.t === 'Revenir au jeu' && u1.run, u1.t);
+  if (process.env.BS_SHOT) {
+    await L().webContents.executeJavaScript(`(() => { document.querySelector('#authBox').style.display = 'none'; document.querySelector('#playBox').style.display = ''; document.querySelector('#playHint').textContent = 'Connecté : exemple'; })()`);
+    // (fenêtre recouverte par le jeu : plus repeinte tant qu'elle n'est pas devant)
+    L().webContents.setBackgroundThrottling(false); L().focus(); L().moveTop(); L().webContents.invalidate();
+    await new Promise(r => setTimeout(r, 1500));
+    writeFileSync(process.env.BS_SHOT, (await L().webContents.capturePage(undefined, { stayAwake: true })).toPNG());
+  }
+  const g = m.windows().game;
+  g.webContents.executeJavaScript('window.__bsQuit()').catch(() => {});   // (pas d'await : la page meurt avant de répondre)
+  ok('⏻ du jeu : la fenêtre du jeu seule se ferme', await wait(() => g.isDestroyed(), 10000) && !m.windows().game && L()?.isVisible() && !m.windows().quitting);
+  await new Promise(r => setTimeout(r, 300));
+  const u2 = await ui();
+  ok('launcher : « Lancer Big Street » après la partie', u2.t === 'Lancer Big Street' && !u2.run, u2.t);
+
+  // (mise à jour au clic : faux updater — vérification, progression relayée au launcher, drapeau « jeu après relance », installation)
+  const { EventEmitter } = await import('node:events');
+  const fake = (mode) => {
+    const up = new EventEmitter(); up.installs = 0;
+    up.quitAndInstall = () => { up.installs++; };
+    up.checkForUpdates = async () => {
+      if (mode === 'offline') throw new Error('hors ligne');
+      if (mode === 'none') return { isUpdateAvailable: false, updateInfo: { version: '0.0.1' } };
+      return { isUpdateAvailable: true, updateInfo: { version: '9.9.9' }, downloadPromise: new Promise((res, rej) => setTimeout(() => {
+        up.emit('download-progress', { percent: 42 });
+        setTimeout(() => (mode === 'fail' ? rej(new Error('coupé')) : (up.emit('update-downloaded'), res([]))), 300);
+      }, 100)) };
+    };
+    return up;
+  };
+  m.writeSettings({ playAfterUpdate: 0 });
+  const offline = fake('offline'), none = fake('none'), fail = fake('fail');
+  ok('mise à jour au clic : hors ligne, à jour ou échec → le jeu se lance quand même',
+    !(await m.updateBeforePlay(offline, true)) && !(await m.updateBeforePlay(none, true)) && !(await m.updateBeforePlay(fail, true))
+    && !(await m.updateBeforePlay(fake('ok'), false)) && offline.installs + none.installs + fail.installs === 0 && !m.windows().quitting && !m.readSettings().playAfterUpdate);
+  const up = fake('ok');
+  let seen = '';
+  const spy = setInterval(() => L().webContents.executeJavaScript(`document.querySelector('#updState').textContent`).then(t => { if (/42 %/.test(t)) seen = t; }, () => {}), 50);
+  const r = await m.updateBeforePlay(up, true);
+  clearInterval(spy);
+  ok('mise à jour au clic : progression montrée dans le launcher', /9\.9\.9.*42 %/.test(seen), seen);
+  await new Promise(res => setTimeout(res, 900));
+  ok('mise à jour au clic : installée et relancée une fois, jeu prévu après la relance', r === true && up.installs === 1 && m.readSettings().playAfterUpdate > 0);
+  const auto = await L().webContents.executeJavaScript('bs.autoPlay().then(a => bs.autoPlay().then(b => [a, b]))');
+  ok('après la relance : le jeu s’ouvre tout seul, une seule fois', auto[0] === true && auto[1] === false);
+  L().hide();   // (pas détruite : « quitting » est posé par la fausse installation, la dernière fenêtre fermée arrêterait les contrôles)
+}
+
 console.log(`Contrôles du launcher (site : ${SITE})\n`);
 process.env.BS_STUDIO_DIR = mkdtempSync(path.join(os.tmpdir(), 'bs-studio-dir-'));     // (jamais le dossier Studio du joueur)
 process.env.BS_STUDIO_CACHE = mkdtempSync(path.join(os.tmpdir(), 'bs-studio-cache-'));
 process.on('exit', () => { for (const d of [process.env.BS_STUDIO_DIR, process.env.BS_STUDIO_CACHE]) rmSync(d, { recursive: true, force: true }); });
 checkMarkup();
-checkRecords().then(checkCams).then(async C => checkAI(C, await checkScene())).then(checkRuntime, e => { console.error(e); process.exit(1); });
+checkRecords().then(checkCams).then(async C => { await (await import('./selftest-anim.mjs')).checkAnim(ok, root); await checkAI(C, await checkScene()); await (await import('./selftest-ia.mjs')).checkIA({ ok, root, C }); await (await import('./selftest-export.mjs')).checkExportNode(ok, root); }).then(checkRuntime, e => { console.error(e); process.exit(1); });

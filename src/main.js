@@ -80,6 +80,8 @@ function readSettings() {
     authNonce: s.authNonce && typeof s.authNonce.value === 'string' ? s.authNonce : null,
     // (demarrage avec Windows, en arriere-plan : oui par defaut, decochable dans Options)
     autoStart: s.autoStart !== false, trayHint: !!s.trayHint,
+    // (mise a jour faite au clic sur « Lancer » : le jeu s'ouvre tout seul apres la relance — horodatage, efface a la lecture)
+    playAfterUpdate: Number(s.playAfterUpdate) || 0,
     // (fenetre de jeu : fenetre ou plein ecran sans bordure)
     displayMode: s.displayMode === 'fullscreen' ? 'fullscreen' : 'windowed',
     // (demandes d'amis deja notifiees : pseudo -> jeton de la notification)
@@ -259,7 +261,8 @@ const GAME_REFRESH_BUTTON = `(() => {
 })();`;
 
 async function openGame() {
-  if (game && !game.isDestroyed()) { game.focus(); return; }
+  // (« Revenir au jeu » : le jeu deja ouvert repasse devant, meme reduit)
+  if (game && !game.isDestroyed()) { if (game.isMinimized()) game.restore(); game.show(); game.focus(); return; }
 
   game = new BrowserWindow({
     width: 1280, height: 800, minWidth: 1024, minHeight: 640,
@@ -335,16 +338,23 @@ async function openGame() {
     game.loadFile(path.join(__dirname, 'offline.html'));
   });
 
-  game.once('ready-to-show', () => {
-    game.show();
-    if (launcher && !launcher.isDestroyed()) launcher.hide();   // le launcher s'efface
-  });
+  // Le launcher reste ouvert derriere le jeu (il sait que le jeu tourne : « Revenir au jeu ») ;
+  // il repasse devant quand la fenetre du jeu se ferme (bouton ⏻ du jeu, croix, Alt+F4).
+  gameState();
+  game.once('ready-to-show', () => { game.show(); game.focus(); });
   game.on('closed', () => {
     game = null;
     if (quitting) return;
-    if (launcher && !launcher.isDestroyed()) launcher.show();   // et revient à la fermeture
-    else app.quit();
+    gameState();
+    if (launcher && !launcher.isDestroyed()) { if (launcher.isMinimized()) launcher.restore(); launcher.show(); launcher.focus(); }
+    else createLauncher();
   });
+}
+
+/** Le launcher affiche « Jeu en cours » / « Revenir au jeu » tant que la fenetre du jeu existe. */
+const gameRunning = () => !!(game && !game.isDestroyed());
+function gameState() {
+  if (launcher && !launcher.isDestroyed()) launcher.webContents.send('bs:game-state', { running: gameRunning() });
 }
 
 /**
@@ -399,6 +409,22 @@ const HIDDEN_START = process.argv.includes('--hidden');
 let tray = null, quitting = false;
 function quitApp() { quitting = true; app.quit(); }
 app.on('before-quit', () => { quitting = true; });
+/** « Quitter Big Street » (icone pres de l'horloge) : si le jeu ou le Studio sont ouverts, on demande avant de tout fermer. */
+async function askQuit() {
+  const open = [gameRunning() && 'le jeu', studio.window && !studio.window.isDestroyed() && 'le Studio'].filter(Boolean);
+  if (open.length) {
+    const r = await dialog.showMessageBox({ type: 'question', title: 'Big Street', buttons: ['Tout fermer', 'Annuler'], defaultId: 0, cancelId: 1,
+      message: `Quitter Big Street fermera aussi ${open.join(' et ')}.`, detail: 'Un record en cours est enregistré avant la fermeture.' }).catch(() => ({ response: 0 }));
+    if (r.response !== 0) return;
+  }
+  quitApp();
+}
+/** Le launcher lui-meme (meme pendant une partie : le Studio, les amis, les options y restent accessibles). */
+function showLauncher() {
+  if (!launcher || launcher.isDestroyed()) return;
+  if (launcher.isMinimized()) launcher.restore();
+  launcher.show(); launcher.focus();
+}
 
 /** Demarrage avec Windows : une entree « Big Street » dans les applications de demarrage (Gestionnaire des taches). */
 function setAutoStart(on) {
@@ -422,15 +448,16 @@ function hideToTray() {
 }
 function trayMenu() {
   return Menu.buildFromTemplate([
-    { label: 'Ouvrir Big Street', click: showMain },
-    { label: 'Amis', click: () => { showMain(); showFriends(); } },
+    { label: gameRunning() ? 'Revenir au jeu' : 'Ouvrir Big Street', click: showMain },
+    ...(gameRunning() ? [{ label: 'Ouvrir le launcher', click: showLauncher }] : []),
+    { label: 'Amis', click: () => { showLauncher(); showFriends(); } },
     { label: 'Studio', click: () => studio.openStudio() },   // (les records se relisent sans connexion, donc sans passer par l'ecran de lancement)
     { type: 'separator' },
     { label: 'Lancer au démarrage de Windows', type: 'checkbox', checked: readSettings().autoStart,
       enabled: process.platform === 'win32' && app.isPackaged,
       click: i => { writeSettings({ autoStart: i.checked }); setAutoStart(i.checked); } },
     { type: 'separator' },
-    { label: 'Quitter Big Street', click: quitApp },
+    { label: 'Quitter Big Street', click: askQuit },
   ]);
 }
 function createTray() {
@@ -749,9 +776,17 @@ function serveLocalAssets(session) {
 const studio = require('./studio-main.js')({ SITE, log, getGame: () => game, getLauncher: () => launcher, installDir, readManifest, safeDest, getToken: () => readSettings().token });
 
 // ------------------------------------------------------------------- Ponts
-ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });
+// (la fenetre qui demande : le launcher reste ouvert pendant le jeu, son « – » ne doit pas reduire le jeu)
+ipcMain.handle('bs:minimize', e => { BrowserWindow.fromWebContents(e.sender)?.minimize(); });
 ipcMain.handle('bs:close', () => { hideToTray(); });
-ipcMain.handle('bs:quit', () => { log.info('quitter (bouton du jeu)'); quitApp(); });
+// Bouton ⏻ du jeu : ferme la fenetre du JEU seulement — le launcher (et le Studio) restent, le launcher repasse devant.
+ipcMain.handle('bs:quit', e => {
+  if (!game || game.isDestroyed() || e.sender !== game.webContents) return { ok: false };
+  log.info('quitter le jeu (bouton du jeu) : le launcher reste');
+  game.close();
+  return { ok: true };
+});
+ipcMain.handle('bs:game-state', () => ({ running: gameRunning() }));
 
 ipcMain.handle('bs:login', async (_e, { name, password }) => {
   try {
@@ -912,8 +947,13 @@ ipcMain.handle('bs:display-set', (_e, mode) => {
   return full ? 'fullscreen' : 'windowed';
 });
 
-ipcMain.handle('bs:play', async () => {
-  try { await openGame(); return { ok: true }; }
+ipcMain.handle('bs:play', async (_e, opts) => {
+  try {
+    // Launcher en retard d'une version : la mise a jour passe d'abord (progression dans le launcher),
+    // puis il redemarre et ouvre le jeu tout seul. (Pas au lancement automatique qui suit une mise a jour : pas de boucle.)
+    if (!gameRunning() && !opts?.afterUpdate && await updateBeforePlay()) return { ok: true, updating: true };
+    await openGame(); return { ok: true };
+  }
   catch (e) { log.error('lancement : ' + e); return { ok: false, error: String(e?.message || e) }; }
 });
 
@@ -1224,16 +1264,21 @@ function updateThenStart() {
       }, 60000);
     };
     autoUpdater.on('update-available', i => {
+      if (done) return;
       clearTimeout(timer);
       log.info(`mise à jour ${i.version}`);
       splashSay('Mise à jour du launcher…');
       watchStall();
     });
     autoUpdater.on('download-progress', p => {
+      if (done) return;
       watchStall();
       splashSay(`Mise à jour du launcher… ${Math.round(p.percent)} %`);
     });
     autoUpdater.on('update-downloaded', () => {
+      // (ecouteurs gardes toute la vie du processus : une fois le demarrage passe, un telechargement fini plus tard
+      // — en tache de fond, ou au clic sur « Lancer » — ne doit pas relancer le launcher en pleine partie)
+      if (done) return;
       clearTimeout(stall);
       splashSay('Redémarrage…');
       finish(true);
@@ -1243,10 +1288,67 @@ function updateThenStart() {
   });
 }
 
+/**
+ * Clic sur « Lancer Big Street » avec un launcher en retard (il vit des jours dans les icones cachees) :
+ * on verifie aupres de GitHub, on telecharge en montrant la progression dans le launcher, on note de lancer
+ * le jeu apres la relance, puis on installe et on relance. Renvoie true si le launcher va redemarrer ;
+ * false (verification impossible, hors ligne, deja a jour, echec, telechargement fige) : le jeu s'ouvre normalement.
+ * `up` et `packaged` : remplacables par les controles automatiques (faux updater).
+ */
+let updating = false;
+async function updateBeforePlay(up = autoUpdater, packaged = app.isPackaged) {
+  if (!packaged || updating) return false;
+  // (un montage ou un export en cours dans le Studio ne doit pas etre tue : la mise a jour attendra la fermeture)
+  if (studio.window && !studio.window.isDestroyed()) return false;
+  const tell = p => { if (launcher && !launcher.isDestroyed()) launcher.webContents.send('bs:update', p); };
+  updating = true;
+  const offs = [];
+  const on = (ev, fn) => { up.on(ev, fn); offs.push(() => up.removeListener(ev, fn)); };
+  try {
+    tell({ state: 'check' });
+    const r = await Promise.race([
+      Promise.resolve().then(() => up.checkForUpdates()).catch(e => { log.warn('mise à jour (Lancer) : ' + (e?.message || e)); return null; }),
+      new Promise(res => setTimeout(() => res(null), 8000)),
+    ]);
+    const version = r?.updateInfo?.version;
+    if (!r || !r.isUpdateAvailable || !version) { tell({ state: 'none' }); return false; }
+    log.info(`mise à jour ${version} avant le jeu`);
+    tell({ state: 'download', version, percent: 0 });
+    const got = await new Promise(res => {
+      let stall = null;
+      const end = v => { clearTimeout(stall); res(v); };
+      const watch = () => { clearTimeout(stall); stall = setTimeout(() => { log.warn('mise à jour (Lancer) figée'); res(false); }, 60000); };
+      on('download-progress', p => { watch(); tell({ state: 'download', version, percent: Math.round(p?.percent || 0) }); });
+      on('update-downloaded', () => end(true));
+      on('error', e => { log.warn('mise à jour (Lancer) : ' + (e?.message || e)); end(false); });
+      watch();
+      // (deja telecharge, ou telechargement lance au demarrage encore en cours : la promesse d'electron-updater le dit aussi)
+      const dl = r.downloadPromise || (typeof up.downloadUpdate === 'function' ? up.downloadUpdate() : null);
+      if (dl && typeof dl.then === 'function') dl.then(() => end(true), e => { log.warn('mise à jour (Lancer) : ' + (e?.message || e)); end(false); });
+    });
+    if (!got) { tell({ state: 'failed' }); return false; }
+    tell({ state: 'restart', version });
+    writeSettings({ playAfterUpdate: Date.now() });
+    quitting = true;                       // (sinon la fermeture du launcher est retenue : « range dans les icones cachees »)
+    setTimeout(() => {
+      try { up.quitAndInstall(true, true); }
+      catch (e) { log.error('installation : ' + e); quitting = false; writeSettings({ playAfterUpdate: 0 }); tell({ state: 'failed' }); }
+    }, 600);
+    return true;
+  } finally { offs.forEach(f => f()); updating = false; }
+}
+// Apres la relance : la page demande une fois si elle doit ouvrir le jeu toute seule (drapeau de moins de 10 min, efface a la lecture).
+ipcMain.handle('bs:autoplay', () => {
+  const t = readSettings().playAfterUpdate;
+  if (!t) return false;
+  writeSettings({ playAfterUpdate: 0 });
+  return Date.now() - t < 10 * 60000;
+});
+
 // Controles automatiques (tools/selftest.mjs) : le module expose ses rouages
 // et n'ouvre aucune fenetre.
 if (process.env.BS_SELFTEST) {
-  module.exports = { studio, openGame, serveLocalAssets, safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
+  module.exports = { createLauncher, updateBeforePlay, windows: () => ({ launcher, game, quitting }), studio, openGame, serveLocalAssets, safeDest, runInstall, handleAuthLink, handleFriendLink, readSettings, writeSettings, installDir, migrateDir, listDrives, state: () => dl, migState: () => mig };
 }
 
 if (!process.env.BS_SELFTEST) app.whenReady().then(async () => {

@@ -129,8 +129,11 @@ Rien ne s'enregistre tant que tu ne l'as pas demandé.
   Ni ton écran, ni ton micro, ni ton sac, ton argent, tes SMS ou ton compte.
 - **Où** : dans `Documents\Big Street\Studio`, un fichier `.bsrec` par lieu
   traversé (format décrit dans `src/records.js` : un en-tête lisible, puis des
-  lignes JSON compressées). Le projet de cinématique (`.bsproj`) et les vidéos
-  exportées (`.webm`) se rangent à côté. **Rien n'est envoyé nulle part.**
+  lignes JSON compressées). Chaque record porte un **identifiant unique** (UUID,
+  dans son en-tête ; les anciens records en reçoivent un, tiré de leur contenu).
+  Le projet de cinématique (`.bsproj`) se range à côté ; les vidéos exportées
+  (WebM, MP4, AVI, GIF) vont dans `Studio\Vidéos`, ou là où tu les enregistres.
+  Rien n'est envoyé nulle part, sauf si tu utilises l'assistant IA (voir plus bas).
 - **Comment** : la page du jeu ne peut qu'ouvrir un record, envoyer son contenu
   et le refermer. Elle ne choisit ni le nom ni l'emplacement du fichier ; le
   launcher les fixe, n'en ouvre qu'un à la fois et le referme si le jeu se
@@ -155,6 +158,17 @@ Rien ne s'enregistre tant que tu ne l'as pas demandé.
   la scène (positions, noms des personnages, caméras) sont envoyés à
   `POST /api/studio/ai`, que le site relaie à un modèle de langage. Rien n'est
   envoyé tant que tu n'écris pas à l'assistant.
+  Quand l'assistant sert sur un record, le launcher envoie aussi **ce record**
+  (le fichier `.bsrec` tel quel, une seule fois, par son identifiant —
+  `POST /api/studio/record`, `src/studio-upload.js`). Le site le range dans le
+  dossier de ton compte (`data/studio-records`, jamais publié, effacé au bout de
+  30 jours, 400 Mo au plus par compte) et note son identifiant dans le journal
+  de l'assistant : c'est ce qui permet de rejouer une session de l'IA pour
+  corriger ses erreurs. Les records sur lesquels tu n'utilises pas l'assistant
+  ne quittent jamais ton ordinateur.
+- L'export vidéo se fait dans le Studio, sans programme externe : rendu image
+  par image, encodage par le navigateur intégré (WebCodecs : VP9, H.264),
+  conteneurs WebM / MP4 / AVI / GIF écrits par `src/studio/encoders.js`.
 - Les poignées de déplacement des caméras sont une copie de `TransformControls`
   de three.js (licence MIT), embarquée dans `src/studio/tcontrols.js`.
 - Supprimer un record depuis le Studio supprime son fichier (et son projet),

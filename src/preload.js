@@ -8,7 +8,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('__bsRefresh', () => ipcRenderer.invoke('bs:refresh-game'));
 
-// Quitter le jeu (bouton ⏻ de la page, après confirmation) : ferme le launcher entier.
+// Quitter le jeu (bouton ⏻ de la page, après confirmation) : ferme la fenêtre du jeu seulement ;
+// le launcher reste ouvert et repasse au premier plan.
 contextBridge.exposeInMainWorld('__bsQuit', () => ipcRenderer.invoke('bs:quit'));
 
 // Le jeu peut détecter qu'il tourne dans le launcher (pour masquer un éventuel

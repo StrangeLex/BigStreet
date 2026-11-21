@@ -17,6 +17,8 @@ const { app, BrowserWindow, ipcMain, shell, session, dialog } = require('electro
 const path = require('node:path');
 const fs = require('node:fs');
 const REC = require('./records.js');
+const { createUploader } = require('./studio-upload.js');
+const { setupExport } = require('./studio-export-main.js');
 
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
   '.json': 'application/json', '.bbmodel': 'application/json', '.glb': 'model/gltf-binary', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -166,7 +168,7 @@ module.exports = function setupStudio({ SITE, log, getGame, getLauncher, install
     });
     studio.once('ready-to-show', () => studio.show());
     studio.on('closed', () => {
-      studio = null; exportEnd();
+      studio = null; exportEnd(); xport.abort();
       const g = getGame(), l = getLauncher();
       if ((!g || g.isDestroyed()) && l && !l.isDestroyed() && !l.isVisible() && !process.env.BS_SELFTEST) l.show();
     });
@@ -216,6 +218,8 @@ module.exports = function setupStudio({ SITE, log, getGame, getLauncher, install
     exp.size += data.length; exp.out.write(Buffer.from(data.buffer, data.byteOffset, data.length));
   });
   ipcMain.handle('bs:studio-export-end', guard(async () => { const file = await exportEnd(); if (file) shell.showItemInFolder(file); return { ok: !!file, file: file ? path.basename(file) : null }; }));
+  // (la page « Exporter » : formats, nom du fichier, écriture à des positions — cf. studio-export-main.js)
+  const xport = setupExport({ ipcMain, guard, fromStudio, recordsDir, dialog, shell, log, win: () => studio, REC });
 
   // ------------------------------------------------------------ 3. Compte (skins possédés, VIP) et assistant IA
   const accountFile = () => path.join(process.env.BS_STUDIO_CACHE || app.getPath('userData'), 'studio-account.json');
@@ -244,6 +248,11 @@ module.exports = function setupStudio({ SITE, log, getGame, getLauncher, install
     try { return cleanAccount(JSON.parse(fs.readFileSync(accountFile(), 'utf8')), false); } catch { return null; }
   }
   ipcMain.handle('bs:studio-account', guard(studioAccount));
+  // (le record ouvert dans le Studio : quand l'assistant sert, il est envoyé une fois au site — cf. studio-upload.js — et la
+  // demande à l'IA porte son identifiant, noté dans le journal du site)
+  let openRec = null;
+  const uploader = createUploader({ site, log, stateFile: () => path.join(process.env.BS_STUDIO_CACHE || app.getPath('userData'), 'studio-sent.json') });
+  ipcMain.handle('bs:studio-current', guard(name => { const file = name ? REC.safeFile(recordsDir(), name) : null; openRec = file && fs.existsSync(file) ? { file, id: REC.recordId(file) } : null; return { ok: true, id: openRec?.id || null }; }));
   // (l'assistant : un échange à la fois, corps borné ; le site vérifie le VIP, le débit et choisit le modèle)
   let aiBusy = false;
   ipcMain.handle('bs:studio-ai', async (e, body) => {
@@ -254,7 +263,8 @@ module.exports = function setupStudio({ SITE, log, getGame, getLauncher, install
     if (!body || typeof body !== 'object' || !Array.isArray(body.messages) || json.length > 400000) return { error: 'Demande trop longue : commence une nouvelle conversation.' };
     aiBusy = true;
     try {
-      const r = await site('studio/ai', { method: 'POST', body: { messages: body.messages, tools: Array.isArray(body.tools) ? body.tools : undefined }, timeout: 90000 });
+      if (openRec?.id && !process.env.BS_STUDIO_NO_UPLOAD) uploader.send(openRec.file, openRec.id);   // (en arrière-plan : l'assistant n'attend pas)
+      const r = await site('studio/ai', { method: 'POST', body: { messages: body.messages, tools: Array.isArray(body.tools) ? body.tools : undefined, record: openRec?.id || undefined }, timeout: 90000 });
       if (r.status === 403 && r.json?.vip === false) return { error: r.json.error || 'Fonctionnalité Studio VIP', vip: false };
       if (r.status === 404) return { error: 'L’assistant n’est pas encore disponible sur le site.' };
       if (!r.json) return { error: r.status === 429 ? 'Trop de requêtes.' : `Le site n’a pas répondu (${r.status}).`, status: r.status };
