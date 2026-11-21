@@ -10,7 +10,7 @@
 // Deux moitiés : createGeoKit (côté page : lit le monde du jeu) et createGeoExt (côté moteur d'actions : outils et contrôles).
 // L'extension est passée au moteur par l'hôte (H.ext) : ai-tools.js n'importe rien (tools/selftest.mjs le charge seul).
 import { extractTriangles, createSoup, createGeo, reasonsText, WHY } from '/__studio/geo.js';
-import { describePlace, placeBrief } from '/__studio/places.js';
+import { describePlace, placeBrief, listPieces } from '/__studio/places.js';
 
 const D2R = Math.PI / 180, R2D = 180 / Math.PI;
 const r1 = v => Math.round(v * 10) / 10, r2 = v => Math.round(v * 100) / 100;
@@ -50,9 +50,9 @@ export function createGeoKit(S) {
     sig = s; builtAt = now; stats = { triangles: R.count, tronque: R.truncated, ms: Date.now() - t0, zone: box };
     return G;
   }
-  const npcs = t => { const out = []; for (const e of S.entities()) { if (e.kind !== 'pnj') continue; const p = S.posAt(e.key, t >= e.t0 && t <= e.t1 ? t : Math.min(e.t1, e.t0 + 1)); if (p) out.push({ id: e.id, name: e.name, title: e.sub || '', x: p.x, z: p.z }); } return out; };
+  const npcs = t => { const out = []; for (const e of S.entities()) { if (e.kind !== 'pnj') continue; const p = S.posAt(e.key, t >= e.t0 && t <= e.t1 ? t : Math.min(e.t1, e.t0 + 1)); if (p) out.push({ id: e.id, name: e.name, title: e.sub || '', x: p.x, z: p.z, y: p.y }); } return out; };
   const meAt = t => { const e = S.entities().find(x => x.me), p = e && S.posAt(e.key, t); return p ? { x: p.x, z: p.z, y: p.y } : null; };
-  const ceilAt = (x, z) => { const g = build(); if (!g) return null; const f = g.groundAt(x, z) ?? 0, h = g.probe({ x, y: f + 1.2, z }, 0, Math.PI / 2, 40); return h ? h.d + 1.2 : null; };
+  const ceilAt = (x, z, y0 = 0) => { const g = build(); if (!g) return null; const f = y0 || (g.groundAt(x, z) ?? 0), h = g.probe({ x, y: f + 1.2, z }, 0, Math.PI / 2, 40); return h ? h.d + 1.2 : null; };
   function describe({ at = null, zone = null, t = S.T(), radius = 45 } = {}) {
     const w = S.world(); if (!w?.room) return null;
     return describePlace(w.room, { furni: S.shared()?.FURNI || {}, npcs: npcs(t), at: at || meAt(t), ceil: w.room.outdoor ? null : ceilAt, zone, radius });
@@ -61,11 +61,10 @@ export function createGeoKit(S) {
   function pieces() {
     const w = S.world(); if (!w?.room || w.room.outdoor) return [];
     const k = `${w.room.id}|${w.room.rows?.length}`; if (placeKey === k && placeCache) return placeCache;
-    const d = describePlace({ ...w.room, items: [] }, {}), all = [...(d.pieces || [])];
-    for (const s of d.autres_pieces || []) { const m = /^(.*) \(([^,]+), x (-?\d+)–(-?\d+), z (-?\d+)–(-?\d+)\)$/.exec(s); if (m) all.push({ nom: m[1], genre: m[2], x: [+m[3], +m[4]], z: [+m[5], +m[6]], centre: { x: (+m[3] + +m[4]) / 2, z: (+m[5] + +m[6]) / 2 } }); }
+    const all = listPieces(w.room);
     placeKey = k; placeCache = all; return all;
   }
-  const pieceAt = (x, z) => pieces().find(p => x >= p.x[0] - 0.5 && x <= p.x[1] + 0.5 && z >= p.z[0] - 0.5 && z <= p.z[1] + 0.5) || null;
+  const pieceAt = (x, z, y = null) => { const L = pieces(), fh = S.world()?.room?.levels ? (S.world().room.levels.floorH || S.world().room.levels.upH || 2.7) : 0, lv = fh && Number.isFinite(y) ? Math.round(y / fh) : null; return L.find(p => (lv === null || p.etage === lv) && x >= p.x[0] - 0.5 && x <= p.x[1] + 0.5 && z >= p.z[0] - 0.5 && z <= p.z[1] + 0.5) || null; };
   /** Les yeux d'un personnage à l'instant t : { x, y, z, yaw, pitch } — son regard enregistré pour le joueur du record, son cap sinon */
   function eye(id, t) {
     const pb = S.pb(), w = S.world(); if (!pb || !w) return null; const q = pb.where(t, id); if (!q) return null;
@@ -76,30 +75,32 @@ export function createGeoKit(S) {
   }
   /** Le dessus d'un objet du décor (hauteur au-dessus du sol), mesuré dans la scène */
   function topOf(x, z) { const g = build(); if (!g?.soup) return null; const f = g.groundAt(x, z) ?? 0, h = g.soup.ray(x, f + 6, z, 0, -1, 0, 6.5); return h ? Math.max(0, 6 - h.d) : null; }
-  return { geo: build, describe, brief: () => { const w = S.world(); return w?.room ? { ...placeBrief(w.room, meAt(S.T())), ...(pieceAt(meAt(S.T())?.x, meAt(S.T())?.z) ? { le_joueur_est_dans: pieceAt(meAt(S.T()).x, meAt(S.T()).z).nom } : {}) } : null; },
+  return { geo: build, describe, brief: () => { const w = S.world(); return w?.room ? { ...placeBrief(w.room, meAt(S.T())), ...(pieceAt(meAt(S.T())?.x, meAt(S.T())?.z, meAt(S.T())?.y) ? { le_joueur_est_dans: pieceAt(meAt(S.T()).x, meAt(S.T()).z, meAt(S.T()).y).nom } : {}) } : null; },
     pieces, pieceAt, eye, topOf, stats: () => stats, reset() { G = null; sig = ''; placeCache = null; placeKey = ''; } };
 }
 
 // ---------------------------------------------------------------- Côté moteur : outils, contrôle et correction des caméras
 const P = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const Sx = (description, extra = {}) => ({ type: 'string', description, ...extra }), N = description => ({ type: 'number', description }), B = description => ({ type: 'boolean', description });
-const ENT = Sx('Entité : son id, son nom, ou "joueur".'), CAM = Sx('Caméra : son nom.'), TS = N('Instant en secondes (défaut : instant courant).');
-const PT = { x: N('X (m)'), y: N('Y, hauteur (m)'), z: N('Z (m)'), entity: ENT };
+const ENT = Sx('Entité : id, nom, ou "joueur".'), CAM = Sx('Nom de la caméra.'), TS = N('Instant (s).');
+const PT = { x: N('X'), y: N('Y'), z: N('Z'), entity: ENT };
 const T = (name, description, parameters, mut = false) => ({ name, description, parameters, mut });
 export const GEO_TOOLS = [
-  T('describe_place', 'Le LIEU du record, à connaître avant de filmer : ce que c’est, ambiance, les pièces (nom, genre : grande salle / salle / couloir, étendue x et z, hauteur sous plafond, mobilier, qui s’y trouve, avec quoi elle communique), les entrées, les MASCOTTES et statues (objets), le décor (affiches… : ni personnages ni mascottes), les PNJ et leur rôle. zone : le nom d’une pièce pour son détail. Dehors : le quartier et ce qu’il y a autour d’un point.', P({ zone: Sx('Nom d’une pièce à détailler.'), near: ENT, x: N('X du point décrit (dehors).'), z: N('Z du point décrit (dehors).'), t: TS })),
-  T('room_bounds', 'Le volume libre autour d’un point ou d’une entité, mesuré dans la vraie géométrie : distance au premier obstacle vers l’est, l’ouest, le nord, le sud, hauteur du sol et du plafond, dans quelle pièce, et si une caméra peut s’y trouver.', P({ ...PT, t: TS })),
-  T('probe', 'Lancer de rayon dans la vraie géométrie : depuis un point (ou les yeux d’une entité), dans une direction (yaw, pitch en degrés) ou vers une entité / un point (toward) → distance au premier mur, plafond, sol ou modèle.', P({ ...PT, yaw: N('Direction à plat (°) : 0 = est (+X), 90 = sud (+Z).'), pitch: N('Élévation (°) : 90 = vers le plafond, −90 = vers le sol.'), toward: { type: 'object', description: 'Viser une entité ou un point.', properties: PT, additionalProperties: false }, t: TS })),
-  T('free_spots', 'Des positions de caméra LIBRES et DÉGAGÉES autour d’un sujet (entité, objet ou point), vérifiées par le moteur : pas dans un mur ni un meuble, sous le plafond, avec le sujet en vue. Chaque position (x, y, z) est utilisable telle quelle dans create_camera ou set_keys avec look_at. À utiliser dès que frame_shot signale un obstacle ou pour un cadrage sur mesure.', P({ subject: ENT, x: N('X du point à regarder.'), y: N('Y du point à regarder.'), z: N('Z du point à regarder.'), t: TS, distance: N('Distance souhaitée au sujet (m).'), side: Sx('Côté souhaité par rapport au regard du sujet (face, dos, profil_droit…).'), count: N('Nombre de positions (défaut 6).') })),
-  T('line_of_sight', 'Le sujet est-il visible depuis un point ou depuis une caméra (à un instant) ? Rend visible oui/non et la distance du premier obstacle.', P({ camera: CAM, x: N('X du point de vue.'), y: N('Y.'), z: N('Z.'), to: { type: 'object', description: 'Ce qu’on veut voir : entité ou point.', properties: PT, additionalProperties: false }, t: TS }, ['to'])),
-  T('check_cameras', 'Contrôle moteur des trajectoires : chaque caméra (ou une seule) est vérifiée échantillon par échantillon le long de son mouvement — dans un mur / meuble / modèle, hors carte, dans le vide, sous le sol, au-dessus du plafond, traversée d’un obstacle, sujet caché — et corrigée automatiquement (fix, vrai par défaut). Rend les comptes MESURÉS avant et après : ce sont les seuls chiffres à annoncer.', P({ camera: CAM, fix: B('Corriger automatiquement (défaut vrai).') }), true),
-  T('path_shot', 'Travelling le long d’un CHEMIN PRATICABLE calculé par le moteur (il contourne murs et meubles, passe par les portes) : pour visiter ou découvrir un lieu, traverser un couloir, aller d’une pièce à une autre. waypoints : étapes dans l’ordre — { place: "nom de pièce" }, { entity: … } (s’arrête devant, en vue) ou { x, z }. La caméra regarde devant elle (look: "devant") ou vers une entité / un point. Vitesse conseillée : 1 à 2,5 m/s.', P({ camera: Sx('Nom de la caméra (créée si elle n’existe pas).'), waypoints: { type: 'array', description: 'Étapes du trajet, dans l’ordre (au moins 2).', items: { type: 'object', properties: { place: Sx('Nom d’une pièce (describe_place).'), entity: ENT, x: N('X'), z: N('Z') }, additionalProperties: false } }, from: N('Début (s).'), to: N('Fin (s).'), height: N('Hauteur de la caméra au-dessus du sol (m), défaut 1,5 ; 0,5 = au ras du sol (inquiétant).'), look: { description: '"devant" (défaut), ou une entité / un point à regarder pendant tout le trajet.', anyOf: [{ type: 'string' }, { type: 'object', properties: PT, additionalProperties: false }] }, pitch: N('Tangage (°) quand elle regarde devant, défaut 0.'), fov: N('Focale (°), défaut 65.'), ease: Sx('Interpolation.', { enum: ['fluide', 'doux', 'accel', 'frein'] }) }, ['camera', 'waypoints', 'from', 'to']), true),
-  T('pov_shot', 'VRAIE vue subjective : la caméra EST les yeux d’un personnage (par défaut le joueur) de « from » à « to » — elle bouge avec lui et regarde où il regardait dans le record ; sa tête est masquée. C’est le seul outil à utiliser pour « vue subjective », « à la première personne », « par ses yeux », « POV ».', P({ camera: Sx('Nom de la caméra (créée si elle n’existe pas).'), subject: ENT, from: N('Début (s).'), to: N('Fin (s).'), fov: N('Focale (°), défaut 75.') }, ['camera', 'from', 'to']), true),
+  T('describe_place', 'Le LIEU du record, à lire avant de filmer : ce que c’est, ambiance, pièces (nom, genre, étendue x/z, étage, hauteur sous plafond, mobilier, personnes, communications), entrées, MASCOTTES et statues (objets), décor (ni personnages ni mascottes), PNJ et rôles. zone : une pièce en détail. Dehors : quartier et alentours d’un point.', P({ zone: Sx('Nom d’une pièce.'), near: ENT, x: N('X (dehors).'), z: N('Z (dehors).'), t: TS })),
+  T('room_bounds', 'Volume libre mesuré autour d’un point ou d’une entité : distance aux obstacles (est, ouest, nord, sud), sol, plafond, pièce, et si une caméra peut s’y tenir.', P({ ...PT, t: TS })),
+  T('probe', 'Lancer de rayon : depuis un point ou une entité, dans une direction (yaw, pitch) ou vers une cible (toward) → distance au premier mur, plafond, sol ou modèle.', P({ ...PT, yaw: N('° : 0 = est, 90 = sud.'), pitch: N('° : 90 = plafond, −90 = sol.'), toward: { type: 'object', description: 'Cible.', properties: PT, additionalProperties: false }, t: TS })),
+  T('free_spots', 'Positions de caméra LIBRES autour d’un sujet (entité, objet ou point), vérifiées : hors des murs et meubles, sous le plafond, sujet en vue. Utilisables telles quelles dans create_camera ou set_keys avec look_at.', P({ subject: ENT, x: N('X'), y: N('Y'), z: N('Z'), t: TS, distance: N('Distance souhaitée (m).'), side: Sx('Côté souhaité (face, dos, profil_droit…).'), count: N('Défaut 6.') })),
+  T('line_of_sight', 'Le sujet est-il visible depuis un point ou une caméra à un instant ? Rend visible et la distance du premier obstacle.', P({ camera: CAM, x: N('X'), y: N('Y'), z: N('Z'), to: { type: 'object', description: 'Entité ou point à voir.', properties: PT, additionalProperties: false }, t: TS }, ['to'])),
+  T('check_cameras', 'Contrôle moteur des trajectoires, échantillon par échantillon (mur, meuble, plafond, sol, vide, hors carte, sujet caché), avec correction automatique. Sans « camera » : seules les caméras créées par l’assistant sont corrigées ; celles posées à la main par l’utilisateur sont mesurées sans être modifiées, sauf include_user. Rend les comptes mesurés avant et après.', P({ camera: CAM, fix: B('Corriger (défaut vrai).'), include_user: B('Corriger aussi les caméras de l’utilisateur (seulement s’il le demande).') }), true),
+  T('path_shot', 'Travelling le long d’un CHEMIN PRATICABLE calculé (contourne murs et meubles, passe par les portes) : visite, couloir, d’une pièce à l’autre. waypoints dans l’ordre : { place: "pièce" }, { entity } (s’arrête devant) ou { x, z }. 1 à 2,5 m/s conseillés.', P({ camera: Sx('Nom de la caméra.'), waypoints: { type: 'array', description: 'Étapes (au moins 2).', items: { type: 'object', properties: { place: Sx('Nom de pièce.'), entity: ENT, x: N('X'), z: N('Z') }, additionalProperties: false } }, from: N('Début (s).'), to: N('Fin (s).'), height: N('Hauteur au-dessus du sol (m), défaut 1,5 ; 0,5 = ras du sol.'), look: { description: '"devant" (défaut), ou entité / point à regarder.', anyOf: [{ type: 'string' }, { type: 'object', properties: PT, additionalProperties: false }] }, pitch: N('°, défaut 0.'), fov: N('°, défaut 65.'), ease: Sx('Interpolation.', { enum: ['fluide', 'doux', 'accel', 'frein'] }) }, ['camera', 'waypoints', 'from', 'to']), true),
+  T('fit_duration', 'Ramène la cinématique à une durée totale (secondes) : les plans du début sont gardés, le plan qui dépasse est resserré, ceux d’après sont supprimés. À utiliser quand l’utilisateur a demandé une durée précise et que le montage est trop long.', P({ seconds: N('Durée totale voulue (s).') }, ['seconds']), true),
+  T('pov_shot', 'VRAIE vue subjective : la caméra EST les yeux d’un personnage (défaut : le joueur) de from à to, avec son regard du record ; sa tête est masquée. Le seul outil pour « vue subjective », « première personne », « POV ».', P({ camera: Sx('Nom de la caméra.'), subject: ENT, from: N('Début (s).'), to: N('Fin (s).'), fov: N('°, défaut 75.') }, ['camera', 'from', 'to']), true),
 ];
 export const GEO_PROMPT = `
 
 # Le lieu et sa géométrie (le moteur mesure tout : sers-t'en)
 - Avant de placer une caméra, appelle describe_place : tu sauras où tu es (les pièces et leurs coordonnées, les couloirs, la hauteur sous plafond, les entrées), ce qui est une MASCOTTE ou une statue (objet du décor, filmable par son id), ce qui n'est que du décor (affiches, dessins, caisses, panneaux : jamais des personnages) et qui sont les PNJ. Ne nomme jamais un objet autrement que par son nom donné par les outils ; n'invente ni personnage ni référence à une œuvre existante.
+- Tout ce que describe_place ou list_entities nomme EXISTE déjà dans la scène (mascottes, mobilier, PNJ) : ne l'ajoute jamais une seconde fois — filme-le par son id.
 - Un sujet peut être n'importe quelle entité listée — joueur, PNJ, véhicule ou OBJET du décor — par son id exact (ex. 1886, "p164") ou son nom.
 - Positions : n'invente pas de coordonnées au hasard. Utilise frame_shot / orbit_shot (cadrage calculé), free_spots (positions libres garanties autour d'un sujet), path_shot (travelling le long d'un chemin praticable : visite, couloir, d'une pièce à l'autre) ; room_bounds et probe mesurent l'espace libre ; line_of_sight dit si le sujet est visible.
 - Découvrir, visiter ou présenter un lieu : au moins un path_shot qui enchaîne les pièces voisines (ex. Hall d'entrée → Vestibule → Grande salle), puis des plans sur ce qu'il y a à voir (mascottes par leur id, PNJ). À l'intérieur il y a un plafond : pas de hauteur « aerien » ni « forte_plongee », pas de plan « tres_large » ; « plongee » au plus.
@@ -241,7 +242,7 @@ export function createGeoExt() {
       },
       room_bounds(a) {
         const G = geo(); if (!G) return ko(NOGEO); const t = tNow(a), p = point(a.entity != null || num(a.x) !== null ? a : { entity: 'joueur' }, t, G); if (!p) return ko('room_bounds : point ou entité introuvable (donne entity, ou x et z).');
-        const b = G.bounds(p), f = b.status.floor ?? p.floor ?? null, piece = H.geo.pieceAt?.(p.x, p.z), q = v => (v === null ? 'dégagé (> 60 m)' : r1(v));
+        const b = G.bounds(p), f = b.status.floor ?? p.floor ?? null, piece = H.geo.pieceAt?.(p.x, p.z, f ?? p.floor ?? p.y), q = v => (v === null ? 'dégagé (> 60 m)' : r1(v));
         const d = { point: { x: r2(p.x), y: r2(p.y), z: r2(p.z) }, ...(piece ? { piece: piece.nom, genre: piece.genre, etendue_piece: { x: piece.x, z: piece.z } } : {}), camera_possible_ici: !b.status.why, ...(b.status.why ? { raison: WHY[b.status.why] } : {}),
           sol_y: f === null ? null : r2(f), plafond_y: b.up === null ? null : r2(p.y + b.up), hauteur_sous_plafond: f === null || b.up === null ? (G.outdoor ? 'ciel' : null) : r1(p.y + b.up - f),
           espace_libre_m: { est: q(b.east), ouest: q(b.west), sud: q(b.south), nord: q(b.north) }, largeur_x: b.east !== null && b.west !== null ? r1(b.east + b.west) : null, profondeur_z: b.south !== null && b.north !== null ? r1(b.south + b.north) : null,
@@ -277,8 +278,10 @@ export function createGeoExt() {
       check_cameras(a) {
         const G = geo(); if (!G) return ko(NOGEO); const one = a.camera ? camOf(a.camera) : null; if (a.camera && !one) return noCam(a.camera, 'check_cameras');
         const L = one ? [one] : H.cams.filter(c => C.span(c)); if (!L.length) return ko('Aucune caméra à contrôler.');
-        const rows = L.map(c => ({ camera: c.name, ...(control(c, a.fix !== false) || { echantillons: 0 }) })), tot = rows.reduce((s, r) => s + (r.echantillons || 0), 0), bad = rows.reduce((s, r) => s + (r.restants || 0), 0), was = rows.reduce((s, r) => s + (r.avant || 0), 0);
-        return ok(`Contrôle moteur : ${tot} échantillons sur ${L.length} caméra${L.length > 1 ? 's' : ''} — ${was} en défaut avant, ${bad} après correction${bad ? ' (voir « intervalles » : à refaire autrement)' : ''}.`, { echantillons: tot, en_defaut_avant: was, restants: bad, cameras: rows });
+        // (une caméra posée à la main par l'utilisateur n'est pas déplacée sans qu'il le demande : mesurée seulement, et c'est dit)
+        const mine = c => !!c.ai || c === one || a.include_user === true, kept = L.filter(c => !mine(c)).map(c => c.name);
+        const rows = L.map(c => ({ camera: c.name, ...(control(c, a.fix !== false && mine(c)) || { echantillons: 0 }), ...(mine(c) ? {} : { posee_par_l_utilisateur: 'mesurée, non modifiée' }) })), tot = rows.reduce((s, r) => s + (r.echantillons || 0), 0), bad = rows.reduce((s, r) => s + (r.restants || 0), 0), was = rows.reduce((s, r) => s + (r.avant || 0), 0);
+        return ok(`Contrôle moteur : ${tot} échantillons sur ${L.length} caméra${L.length > 1 ? 's' : ''} — ${was} en défaut avant, ${bad} après correction${bad ? ' (voir « intervalles » : à refaire autrement)' : ''}${kept.length ? ` — non modifiée${kept.length > 1 ? 's' : ''} car posée${kept.length > 1 ? 's' : ''} à la main par l’utilisateur : ${kept.map(n => `« ${n} »`).join(', ')} (demande-lui avant de les corriger : include_user)` : ''}.`, { echantillons: tot, en_defaut_avant: was, restants: bad, cameras: rows });
       },
       path_shot(a) {
         const G = geo(); if (!G) return ko(NOGEO); if (!a.camera) return ko('path_shot : il manque « camera » (le nom du plan).');
@@ -287,20 +290,22 @@ export function createGeoExt() {
         const hgt = clamp(num(a.height) ?? 1.5, 0.3, 30), pieces = H.geo.pieces?.() || [], pts = [], names = [];
         for (const wp of a.waypoints.slice(0, 12)) {
           let p = null, nm = '';
-          if (wp?.place) { const n = nrm(wp.place), pc = pieces.find(q => nrm(q.nom) === n) || pieces.find(q => nrm(q.nom).includes(n) || n.includes(nrm(q.nom))); if (!pc) return ko(`path_shot : pièce « ${wp.place} » inconnue (describe_place donne les noms : ${pieces.slice(0, 12).map(q => q.nom).join(', ')}…).`); p = { x: pc.centre.x, z: pc.centre.z }; nm = pc.nom; }
+          if (wp?.place) { const n = nrm(wp.place), pc = pieces.find(q => nrm(q.nom) === n) || pieces.find(q => nrm(q.nom).includes(n) || n.includes(nrm(q.nom))); if (!pc) return ko(`path_shot : pièce « ${wp.place} » inconnue (describe_place donne les noms : ${pieces.slice(0, 12).map(q => q.nom).join(', ')}…).`); p = { x: pc.centre.x, z: pc.centre.z, y0: pc.sol_y || 0 }; nm = pc.nom; }
           else if (wp?.entity != null && wp.entity !== '') { const e = ent(wp.entity), h = e && headOf(e, t1); if (!h) return ko(`path_shot : entité « ${wp.entity} » introuvable.`); const f = G.freeSpots(h, { n: 1, floorY: h.floor, heights: [hgt], rMin: 1.6, rMax: 6, prefer: { dist: 2.6, ...(pts.length ? { az: Math.atan2(pts[pts.length - 1].z - h.z, pts[pts.length - 1].x - h.x) } : {}) } })[0]; p = f ? { x: f.x, z: f.z } : { x: h.x, z: h.z }; nm = `devant ${e.name}`; }
           else if (num(wp?.x) !== null && num(wp?.z) !== null) { p = { x: num(wp.x), z: num(wp.z) }; nm = `(${r1(p.x)}, ${r1(p.z)})`; }
           else return ko('path_shot : une étape doit être { place }, { entity } ou { x, z }.');
-          const f = G.groundAt(p.x, p.z) ?? 0, q = G.nearestFree({ x: p.x, y: f + hgt, z: p.z }, { maxR: 6 }); if (!q) return ko(`path_shot : aucun point libre près de l’étape ${nm}.`);
+          const f = p.y0 ? p.y0 : G.groundAt(p.x, p.z) ?? 0, q = G.nearestFree({ x: p.x, y: f + hgt, z: p.z }, { maxR: 6 }); if (!q) return ko(`path_shot : aucun point libre près de l’étape ${nm}.`);
           pts.push(q); names.push(nm);
         }
         const line = [pts[0]];
-        for (let i = 1; i < pts.length; i++) { const L = dist3(pts[i - 1], pts[i]), R = G.route(pts[i - 1], pts[i], { step: L > 24 ? 1 : 0.5, pad: L > 24 ? 16 : 9, maxNodes: 14000 }); if (!R) return ko(`path_shot : pas de chemin praticable entre ${names[i - 1]} et ${names[i]} (pièces séparées ou trop éloignées : ajoute une étape intermédiaire — une pièce voisine, cf. « communique_avec » de describe_place).`); line.push(...R.slice(1)); }
+        for (let i = 1; i < pts.length; i++) { const L = dist3(pts[i - 1], pts[i]);
+          // (deux pièces voisines à vol d'oiseau peuvent n'être reliées que par un long détour : la recherche s'élargit par paliers)
+          let R = null; for (const [step, pad, maxNodes] of [[L > 24 ? 1 : 0.5, L > 24 ? 16 : 9, 14000], [1, 30, 30000], [1, 60, 60000]]) { R = G.route(pts[i - 1], pts[i], { step, pad, maxNodes }); if (R) break; } if (!R) return ko(`path_shot : pas de chemin praticable entre ${names[i - 1]} et ${names[i]} (pièces séparées ou trop éloignées : ajoute une étape intermédiaire — une pièce voisine, cf. « communique_avec » de describe_place).`); line.push(...R.slice(1)); }
         const dense = densify(line, 1.8), cum = [0]; for (let i = 1; i < dense.length; i++) cum.push(cum[i - 1] + dist3(dense[i - 1], dense[i])); const len = cum[cum.length - 1] || 1;
         const nMax = Math.max(2, Math.min(48, Math.floor((t1 - t0) / 250))), every = Math.max(1, Math.ceil(dense.length / nMax)), ease = C.EASES[a.ease] && a.ease !== 'fixe' ? a.ease : 'fluide';
         let c = camOf(a.camera); const made = !c; if (!c) { c = C.newCam(H.cams); c.name = String(a.camera).slice(0, 40); H.cams.push(c); }
         for (const ch of ['x', 'y', 'z', 'yaw', 'pitch']) c.tracks[ch] = c.tracks[ch].filter(k => k.t < t0 || k.t > t1);
-        if (c.parent) { c.parent = null; c.follow = false; c.look = false; } c.pov = false;
+        if (c.parent) { c.parent = null; c.follow = false; c.look = false; } c.pov = false; c.path = true; if (made) c.ai = true;
         let look = null; if (a.look && a.look !== 'devant') { look = typeof a.look === 'object' ? a.look : { entity: a.look }; if (!point(look, t0, G)) look = null; else if (look.entity != null) c.aim = ent(look.entity)?.key || null; } if (!look) c.aim = null;
         const ahead = d => { const s = Math.min(len, d + 2.8); let i = 1; while (i < cum.length - 1 && cum[i] < s) i++; const u = (s - cum[i - 1]) / Math.max(1e-6, cum[i] - cum[i - 1]); return { x: dense[i - 1].x + (dense[i].x - dense[i - 1].x) * u, z: dense[i - 1].z + (dense[i].z - dense[i - 1].z) * u }; };
         const pitch = clamp((num(a.pitch) ?? 0) * D2R, -1.2, 1.2); let n = 0, lastYaw = 0;
@@ -314,13 +319,23 @@ export function createGeoExt() {
         const speed = len / ((t1 - t0) / 1000);
         return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}travelling de ${r1(len)} m le long d’un chemin praticable (${names.join(' → ')}), de ${fmtT(t0)} à ${fmtT(t1)}, à ${r1(hgt)} m du sol, ${r1(speed)} m/s${speed > 3.2 ? ' — ⚠ rapide : allonge la durée ou raccourcis le trajet (1 à 2,5 m/s conseillés)' : ''} — ce plan occupe ${fmtT(t0)} → ${fmtT(t1)} : fais commencer le plan suivant à ${fmtT(t1)} (un plan posé sur le même intervalle le recouvrirait).`, { camera: c.name, creee: made, longueur_m: r1(len), vitesse_m_s: r1(speed), cles: n, etapes: names });
       },
+      fit_duration(a) {
+        const want = num(a.seconds), R = C.cineRange(H.cams); if (!R) return ko('fit_duration : pas encore de cinématique.'); if (want === null || want < 2) return ko('fit_duration : donne « seconds » (durée totale voulue, au moins 2 s).');
+        const end = R[0] + Math.round(want * 1000), got = (R[1] - R[0]) / 1000; if (got <= want + 0.3) return ko(`La cinématique fait ${r1(got)} s : elle ne dépasse pas ${want} s (pour l’allonger, ajoute des plans courts).`);
+        const cut = [], squeezed = [];
+        for (const c of [...H.cams]) { const sp = c.on && C.span(c); if (!sp) continue; const [a0, b0] = sp;
+          if (a0 >= end - 1200) { H.cams = C.removeCam(H.cams, c, H.frame); cut.push(c.name); continue; }
+          if (b0 > end) { const k = (end - a0) / (b0 - a0); for (const ch of Object.keys(c.tracks)) { for (const key of c.tracks[ch]) key.t = Math.round(a0 + (key.t - a0) * k); c.tracks[ch] = C.sortTrack(c.tracks[ch], ch).filter((q, j, L) => !j || q.t - L[j - 1].t > 0); } squeezed.push(`« ${c.name} » (${r1((b0 - a0) / 1000)} → ${r1((end - a0) / 1000)} s)`); } }
+        const R2 = C.cineRange(H.cams);
+        return ok(`Cinématique ramenée à ${R2 ? r1((R2[1] - R2[0]) / 1000) : 0} s${squeezed.length ? ` — resserré : ${squeezed.join(', ')}` : ''}${cut.length ? ` — supprimé${cut.length > 1 ? 's' : ''} : ${cut.map(n => `« ${n} »`).join(', ')}` : ''}.`, { duree: R2 ? r1((R2[1] - R2[0]) / 1000) : 0, supprimes: cut, resserres: squeezed.length });
+      },
       pov_shot(a) {
         if (!a.camera) return ko('pov_shot : il manque « camera » (le nom du plan).');
         const e = a.subject == null || a.subject === '' ? H.entities().find(x => x.me) : ent(a.subject); if (!e || (e.kind !== 'joueur' && e.kind !== 'pnj')) return ko(`pov_shot : « ${a.subject ?? 'joueur'} » n’est pas un personnage.`);
         const t0 = ms(a.from, Math.round(H.T)); let t1 = ms(a.to, Math.round(H.dur)); if (t1 - t0 < 500) t1 = Math.min(Math.round(H.dur), t0 + 3000); if (t1 - t0 < 300) return ko('pov_shot : « to » doit être après « from ».');
         let c = camOf(a.camera); const made = !c; if (!c) { c = C.newCam(H.cams); c.name = String(a.camera).slice(0, 40); H.cams.push(c); }
         for (const ch of C.CH) c.tracks[ch] = c.tracks[ch].filter(k => k.t < t0 || k.t > t1);
-        c.parent = { kind: 'perso', id: e.id, name: e.name }; c.follow = true; c.look = false; c.pov = true; c.aim = null;
+        c.parent = { kind: 'perso', id: e.id, name: e.name }; c.follow = true; c.look = false; c.pov = true; c.aim = null; if (made) c.ai = true;
         const fov = clamp(num(a.fov) ?? 75, 20, 120);
         for (const t of [t0, t1]) { for (const ch of ['x', 'y', 'z', 'yaw', 'pitch', 'roll']) C.setKey(c, ch, t, 0); C.setKey(c, 'fov', t, fov); }
         return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}vue subjective de ${e.name} de ${fmtT(t0)} à ${fmtT(t1)} — la caméra est à ses yeux${e.me ? ' et regarde où il regardait dans le record' : ' et regarde devant lui'} (sa tête est masquée).`, { camera: c.name, creee: made, subjective: true, sujet: e.name });
@@ -333,6 +348,7 @@ export function createGeoExt() {
         if (!r?.ok || !H.geo) return r;
         if (name === 'pov_shot' || name === 'check_cameras' || !MOVERS.has(name)) return r;
         const c = camOf(r.data?.camera ?? a?.camera ?? a?.name); if (!c) return r;
+        if (r.data?.creee || r.data?.camera && (name === 'create_camera' || name === 'duplicate_camera' || /créée/.test(r.text))) c.ai = true;   // (caméra faite par l'assistant : il peut la corriger sans demander)
         // (le sujet visé : gardé sur la caméra, pour contrôler qu'il reste en vue)
         const sub = name === 'frame_shot' || name === 'orbit_shot' ? a.subject ?? 'joueur' : name === 'create_camera' ? a.look_at?.entity : name === 'set_keys' ? [...(a.keys || [])].reverse().find(k => k?.look_at?.entity != null)?.look_at.entity : undefined;
         if (sub !== undefined && sub !== null) { const e = ent(sub); if (e) c.aim = e.key; } else if (name === 'create_camera' || (name === 'set_keys' && (a.keys || []).some(k => num(k?.yaw) !== null))) c.aim = name === 'create_camera' ? null : c.aim;

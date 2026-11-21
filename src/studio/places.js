@@ -115,7 +115,8 @@ export function itemKind(type, def = null) {
  * { furni (fiches des objets : nom, w, d…), npcs: [{ id, name, title, x, z }], at: { x, z } (où est le joueur), ceil(x, z) (hauteur
  * sous plafond mesurée, ou null), radius (dehors : rayon décrit autour de « at ») }. Rend un objet prêt à donner à l'assistant.
  */
-export function describePlace(room, { furni = {}, npcs = [], at = null, ceil = null, radius = 45, zone = null } = {}) {
+export function describePlace(room, opt = {}) {
+  const { furni = {}, npcs = [], at = null, ceil = null, radius = 45, zone = null } = opt;
   const K = placeInfo(room.id), name = room.name || roomName(room.id), rows = room.rows || [], ox = room.ox || 0, oz = room.oy || 0;
   const def = t => furni[t] || null, label = t => def(t)?.name || String(t).replace(/_/g, ' ');
   const size = (t, rot) => { const d = def(t), w = d?.w || 1, dd = d?.d || 1; return Math.round(rot || 0) % 2 ? [dd, w] : [w, dd]; };
@@ -141,56 +142,63 @@ export function describePlace(room, { furni = {}, npcs = [], at = null, ceil = n
   // Dedans : les pièces (rectangles de sol), nommées d'après la fiche du lieu quand elles y sont
   const W = Math.max(0, ...rows.map(r => r.length)), H = rows.length;
   out.dimensions = { largeur_x: W, profondeur_z: H, x: [ox, ox + W - 1], z: [oz, oz + H - 1] };
-  const R = splitRooms(rows).map(r => ({ ...r, x0: r.x0 + ox, x1: r.x1 + ox, z0: r.z0 + oz, z1: r.z1 + oz }));
-  const named = (K?.zones || []).map(([nom, x0, z0, x1, z1, note]) => ({ nom, x0, z0, x1, z1, note }));
+  // (bâtiment à étages — hôpital, maison : dans le plan, chaque niveau est rangé LS lignes sous le précédent ; à l'image, il est
+  // au-dessus : z = ligne − niveau × LS, sol à y = niveau × FH. Chaque niveau est découpé à part.)
+  const LS = room.levels?.shift || 0, FH = room.levels?.floorH || room.levels?.upH || 2.7, nLv = LS ? Math.max(1, Math.ceil(H / LS)) : 1, lvName = k => (k ? `Étage ${k}` : 'Rez-de-chaussée');
+  const lvlOfRow = y => (LS ? Math.max(0, Math.min(nLv - 1, Math.floor((y - oz + 0.5) / LS))) : 0), lvlOfY = y => (LS && Number.isFinite(y) ? Math.max(0, Math.min(nLv - 1, Math.round(y / FH))) : null);
+  if (LS) { out.etages = nLv; out.dimensions.profondeur_z = LS; out.dimensions.z = [oz, oz + LS - 1]; out.dimensions.hauteur_d_etage = FH; out.reperes += ` ; ${nLv} niveaux : le sol de l’étage k est à y = k × ${FH} m (rez-de-chaussée : y 0)`; }
+  const R = [];
+  for (let k = 0; k < nLv; k++) for (const r of splitRooms(LS ? rows.slice(k * LS, (k + 1) * LS) : rows)) R.push({ ...r, x0: r.x0 + ox, x1: r.x1 + ox, z0: r.z0 + oz, z1: r.z1 + oz, lvl: k });
+  const named = (K?.zones || []).map(([nom, x0, z0, x1, z1, note, lvl = 0]) => ({ nom, x0, z0, x1, z1, note, lvl }));
   const inter = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) + 1) * Math.max(0, Math.min(a.z1, b.z1) - Math.max(a.z0, b.z0) + 1);
   let anon = 0;
   const pieces = R.map(r => {
-    const z = named.map(q => ({ q, k: inter(r, q) / Math.max(r.area, (q.x1 - q.x0 + 1) * (q.z1 - q.z0 + 1)) })).sort((a, b) => b.k - a.k)[0], hit = z && z.k > 0.45 ? z.q : null, kind = kindOf(r);
-    return { nom: hit?.nom || `${kind[0].toUpperCase()}${kind.slice(1)} ${String.fromCharCode(65 + (anon++ % 26))}${anon > 26 ? Math.floor(anon / 26) : ''}`, genre: kind, x: [r.x0, r.x1], z: [r.z0, r.z1], taille: `${r.w} × ${r.d} m`, centre: { x: r1((r.x0 + r.x1) / 2), z: r1((r.z0 + r.z1) / 2) }, ...(hit?.note ? { note: hit.note } : {}), _r: r, _items: new Map(), _npcs: [], _w: (hit?.note ? 150 : 0) + r.area };
+    const z = named.filter(q => q.lvl === r.lvl).map(q => ({ q, k: inter(r, q) / Math.max(r.area, (q.x1 - q.x0 + 1) * (q.z1 - q.z0 + 1)) })).sort((a, b) => b.k - a.k)[0], hit = z && z.k > 0.45 ? z.q : null, kind = kindOf(r);
+    return { nom: hit?.nom || `${LS ? `${lvName(r.lvl)} — ` : ''}${kind[0].toUpperCase()}${kind.slice(1)} ${String.fromCharCode(65 + (anon++ % 26))}${anon > 26 ? Math.floor(anon / 26) : ''}`, genre: kind, ...(LS ? { etage: r.lvl, sol_y: r1(r.lvl * FH) } : {}), x: [r.x0, r.x1], z: [r.z0, r.z1], taille: `${r.w} × ${r.d} m`, centre: { x: r1((r.x0 + r.x1) / 2), z: r1((r.z0 + r.z1) / 2) }, ...(hit?.note ? { note: hit.note } : {}), _r: r, _items: new Map(), _npcs: [], _w: (hit?.note ? 150 : 0) + r.area };
   });
-  const pieceAt = (x, z) => pieces.find(p => x >= p._r.x0 - 0.5 && x <= p._r.x1 + 0.5 && z >= p._r.z0 - 0.5 && z <= p._r.z1 + 0.5) || null;
+  const pieceAt = (x, z, lvl = null) => pieces.find(p => (lvl === null || !LS || p._r.lvl === lvl) && x >= p._r.x0 - 0.5 && x <= p._r.x1 + 0.5 && z >= p._r.z0 - 0.5 && z <= p._r.z1 + 0.5) || null;
   // (qui communique avec qui : deux pièces qui se touchent, ou qu'une ouverture d'une ou deux cases relie)
-  const cell = (x, z) => WALK(rows[z - oz]?.[x - ox]);
+  const cell = (x, z, k = 0) => (!LS || (z - oz >= 0 && z - oz < LS)) && WALK(rows[z - oz + k * LS]?.[x - ox]);
   const links = new Map(pieces.map(p => [p, new Set()]));
-  for (let z = oz; z < oz + H; z++) for (let x = ox; x < ox + W; x++) {
-    if (!cell(x, z)) continue; const a = pieceAt(x, z);
+  for (let k = 0; k < nLv; k++) for (let z = oz; z < oz + (LS || H); z++) for (let x = ox; x < ox + W; x++) {
+    if (!cell(x, z, k)) continue; const a = pieceAt(x, z, k);
     for (const [dx, dz] of [[1, 0], [0, 1]]) {
-      let nx = x + dx, nz = z + dz, hops = 0; while (cell(nx, nz) && !pieceAt(nx, nz) && hops < 3) { nx += dx; nz += dz; hops++; }
-      if (!cell(nx, nz)) continue; const b = pieceAt(nx, nz); if (a && b && a !== b) { links.get(a).add(b.nom); links.get(b).add(a.nom); }
+      let nx = x + dx, nz = z + dz, hops = 0; while (cell(nx, nz, k) && !pieceAt(nx, nz, k) && hops < 3) { nx += dx; nz += dz; hops++; }
+      if (!cell(nx, nz, k)) continue; const b = pieceAt(nx, nz, k); if (a && b && a !== b) { links.get(a).add(b.nom); links.get(b).add(a.nom); }
     }
   }
   // Les objets : mascottes (à part), décor (compté), mobilier (par pièce)
   const masc = [], decor = new Map(), big = [];
   for (const it of room.items || []) {
-    const d = def(it.type), k = itemKind(it.type, d), [w, dd] = size(it.type, it.rot), cx = it.x + (w - 1) / 2, cz = it.y + (dd - 1) / 2, p = pieceAt(cx, cz), nom = label(it.type);
+    const d = def(it.type), k = itemKind(it.type, d), [w, dd] = size(it.type, it.rot), lv = lvlOfRow(it.y), cx = it.x + (w - 1) / 2, cz = it.y - lv * LS + (dd - 1) / 2, p = pieceAt(cx, cz, lv), nom = label(it.type);
     if (k === 'mascotte') { masc.push({ id: it.id, nom, x: r1(cx), z: r1(cz), piece: p?.nom || '?' }); if (p) p._w += 500; continue; }
     if (k === 'decor') { if (!/^detritus|^cable|^conduit/.test(it.type)) decor.set(nom, (decor.get(nom) || 0) + 1); continue; }
     if (p) { const g = p._items.get(nom) || { n: 0, id: it.id, x: r1(cx), z: r1(cz), a: w * dd }; g.n++; p._items.set(nom, g); }
     if (w * dd >= 12) big.push({ id: it.id, nom, x: r1(cx), z: r1(cz), taille: `${w} × ${dd} m`, piece: p?.nom || '?' });
   }
-  for (const n of npcs) { const p = pieceAt(n.x, n.z); if (p) { p._npcs.push(n.name); p._w += 120; } }
-  const here = at ? pieceAt(at.x, at.z) : null, focus = zone ? pieces.filter(p => nrm(p.nom).includes(nrm(zone))) : null;
+  for (const n of npcs) { const p = pieceAt(n.x, n.z, lvlOfY(n.y)); if (p) { p._npcs.push(n.name); p._w += 120; } }
+  const here = at ? pieceAt(at.x, at.z, lvlOfY(at.y)) : null, focus = zone ? pieces.filter(p => nrm(p.nom).includes(nrm(zone))) : null;
   if (zone && !focus.length) out.remarque = `aucune pièce ne s’appelle « ${zone} » : voici tout le lieu`;
   // (d'abord la pièce du joueur, puis celles où il y a quelque chose à filmer — mascottes, gens, pièces décrites —, puis les plus grandes)
   const show = (focus?.length ? focus : pieces).sort((a, b) => (b === here) - (a === here) || b._w - a._w).slice(0, focus?.length ? 8 : 12);
   out.pieces = show.map(p => {
-    const c = ceil ? ceil(p.centre.x, p.centre.z) : null, mob = [...p._items.entries()].sort((a, b) => b[1].a * b[1].n - a[1].a * a[1].n).slice(0, focus?.length ? 14 : 4).map(([nom, g]) => (g.n > 1 ? `${g.n} × ${nom}` : `${nom} (id ${g.id}, x ${g.x}, z ${g.z})`));
-    const o = { nom: p.nom, genre: p.genre, x: p.x, z: p.z, taille: p.taille, centre: p.centre, ...(Number.isFinite(c) ? { hauteur_sous_plafond: r1(c) } : {}), ...(p.note ? { note: p.note } : {}) };
+    const c = ceil ? ceil(p.centre.x, p.centre.z, p.sol_y || 0) : null, mob = [...p._items.entries()].sort((a, b) => b[1].a * b[1].n - a[1].a * a[1].n).slice(0, focus?.length ? 14 : 4).map(([nom, g]) => (g.n > 1 ? `${g.n} × ${nom}` : `${nom} (id ${g.id}, x ${g.x}, z ${g.z})`));
+    const o = { nom: p.nom, genre: p.genre, ...(LS ? { etage: p.etage, sol_y: p.sol_y } : {}), x: p.x, z: p.z, taille: p.taille, centre: p.centre, ...(Number.isFinite(c) ? { hauteur_sous_plafond: r1(c) } : {}), ...(p.note ? { note: p.note } : {}) };
     if (mob.length) o.mobilier = mob; if (p._npcs.length) o.personnes = [...new Set(p._npcs)].slice(0, 5).concat(p._npcs.length > 5 ? [`… ${p._npcs.length} en tout`] : []); const L = [...links.get(p)]; if (L.length) o.communique_avec = L.slice(0, 6);
     if (p === here) o.le_joueur_est_ici = true;
     return o;
   });
-  if (pieces.length > show.length) { out.autres_pieces = pieces.filter(p => !show.includes(p)).slice(0, 40).map(p => `${p.nom} (${p.genre}, x ${p.x[0]}–${p.x[1]}, z ${p.z[0]}–${p.z[1]})`); out.pour_le_detail = 'describe_place avec zone = le nom d’une pièce'; }
+  if (pieces.length > show.length) { out.autres_pieces = pieces.filter(p => !show.includes(p)).slice(0, 40).map(p => `${p.nom} (${p.genre}, x ${p.x[0]}–${p.x[1]}, z ${p.z[0]}–${p.z[1]}${LS ? `, étage ${p.etage}` : ''})`); out.pour_le_detail = 'describe_place avec zone = le nom d’une pièce'; }
   if (here) out.le_joueur_est_dans = here.nom;
-  const cs = ceil ? show.slice(0, 6).map(p => ceil(p.centre.x, p.centre.z)).filter(Number.isFinite) : [];
+  const cs = ceil ? show.slice(0, 6).map(p => ceil(p.centre.x, p.centre.z, p.sol_y || 0)).filter(Number.isFinite) : [];
   out.plafond = cs.length ? `oui : ${r1(Math.min(...cs))}${Math.max(...cs) - Math.min(...cs) > 0.3 ? ` à ${r1(Math.max(...cs))}` : ''} m au-dessus du sol — une caméra doit rester en dessous (0,3 m de marge)` : 'oui (intérieur) : garder la caméra sous 2,6 m du sol sauf mesure contraire (room_bounds)';
-  out.entrees = portals.slice(0, 12).map(p => ({ x: p.x, z: p.y, vers: roomName(p.to), ...(pieceAt(p.x, p.y) ? { dans: pieceAt(p.x, p.y).nom } : {}) }));
+  out.entrees = portals.slice(0, 12).map(p => { const lv = lvlOfRow(p.y), z = p.y - lv * LS, pc = pieceAt(p.x, z, lv); return { x: p.x, z, ...(LS ? { etage: lv } : {}), vers: roomName(p.to), ...(pc ? { dans: pc.nom } : {}) }; });
   out.mascottes = masc.length ? { ce_que_c_est: 'statues mécaniques de personnages, immobiles ou animées sur place : des OBJETS du décor (pas des entités du record). Pour les filmer : frame_shot avec subject = leur id.', liste: masc } : [];
   out.mobilier_marquant = big.slice(0, 10);
   out.decor = { ce_que_c_est: 'décor mural, au sol ou au plafond : ni personnages ni mascottes', compte: Object.fromEntries([...decor.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12)) };
-  out.pnj = npcs.slice(0, 24).map(n => ({ id: n.id, nom: n.name, ...(n.title ? { role: n.title } : {}), x: r1(n.x), z: r1(n.z), ...(pieceAt(n.x, n.z) ? { piece: pieceAt(n.x, n.z).nom } : {}) }));
+  out.pnj = npcs.slice(0, 24).map(n => ({ id: n.id, nom: n.name, ...(n.title ? { role: n.title } : {}), x: r1(n.x), z: r1(n.z), ...(pieceAt(n.x, n.z, lvlOfY(n.y)) ? { piece: pieceAt(n.x, n.z, lvlOfY(n.y)).nom } : {}) }));
   if (K?.notes) out.a_savoir = K.notes;
+  if (opt.all) out._toutes = pieces.map(p => ({ nom: p.nom, genre: p.genre, x: p.x, z: p.z, centre: p.centre, etage: p.etage ?? 0, sol_y: p.sol_y ?? 0 }));
   return out;
 }
 /** La fiche courte d'un lieu, jointe à chaque message (quelques lignes) */
@@ -198,3 +206,5 @@ export function placeBrief(room, at = null) {
   const K = placeInfo(room.id), D = room.outdoor && at ? districtAt(at.x, at.z) : null;
   return { ...(K?.genre ? { genre: K.genre } : {}), ...(K?.resume || room.desc ? { description: (K?.resume || room.desc).slice(0, 420) } : {}), ...(D ? { quartier: D[0] } : {}), detail: 'describe_place' };
 }
+/** Toutes les pièces d'un intérieur : [{ nom, genre, x: [x0, x1], z: [z0, z1], centre, etage, sol_y }] */
+export const listPieces = room => (room?.outdoor ? [] : describePlace({ ...room, items: [] }, { all: true })._toutes || []);

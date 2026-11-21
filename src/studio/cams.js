@@ -42,7 +42,14 @@ const wrap = a => Math.atan2(Math.sin(a), Math.cos(a));
 const lim = (ch, v) => (LIM[ch] ? clamp(v, LIM[ch][0], LIM[ch][1]) : v);
 const TOL = 45;   // (ms : deux clés plus proches que ça sont « au même instant »)
 
-const cleanK = (ch, k) => ({ t: Math.max(0, Math.round(num(k.t))), v: lim(ch, num(k.v, DEF[ch] || 0)), ease: EASE[k.ease] ? k.ease : 'fluide' });
+// (poignées de tangente — éditeur de courbes : hm 'aligne' | 'libre', li = [dt ≤ 0, dv], ro = [dt ≥ 0, dv] ; même format que objets.js)
+const hnd = k => { if (k.hm !== 'aligne' && k.hm !== 'libre') return {}; const h = a => (Array.isArray(a) && Number.isFinite(+a[0]) && Number.isFinite(+a[1]) ? [+a[0], +a[1]] : null), li = h(k.li), ro = h(k.ro); return li || ro ? { hm: k.hm, ...(li ? { li: [Math.min(0, li[0]), li[1]] } : {}), ...(ro ? { ro: [Math.max(0, ro[0]), ro[1]] } : {}) } : {}; };
+function bezAt(a, b, t) {
+  const D = b.t - a.t, o = a.ro || [D / 3, (b.v - a.v) / 3], i = b.li || [-D / 3, -(b.v - a.v) / 3], x1 = Math.min(D, Math.max(0, o[0])), x2 = D + Math.max(-D, Math.min(0, i[0]));
+  const X = u => 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u * D; let lo = 0, hi = 1; for (let n = 0; n < 24; n++) { const m = (lo + hi) / 2; if (X(m) < t - a.t) lo = m; else hi = m; }
+  const u = (lo + hi) / 2, w = 1 - u; return w * w * w * a.v + 3 * w * w * u * (a.v + o[1]) + 3 * w * u * u * (b.v + i[1]) + u * u * u * b.v;
+}
+const cleanK = (ch, k) => ({ t: Math.max(0, Math.round(num(k.t))), v: lim(ch, num(k.v, DEF[ch] || 0)), ease: EASE[k.ease] ? k.ease : 'fluide', ...hnd(k) });
 /** Une piste triée ; le lacet est déroulé d'une clé à la suivante (la caméra tourne par le plus court). */
 export function sortTrack(L, ch) {
   L.sort((a, b) => a.t - b.t);
@@ -161,6 +168,7 @@ export function valAt(L, t, def = 0) {
   if (t <= L[0].t) return L[0].v; if (t >= L[n - 1].t) return L[n - 1].v;
   let i = 0; while (i + 1 < n && L[i + 1].t <= t) i++;
   const a = L[i], b = L[i + 1]; if (a.ease === 'fixe' || b.t - a.t < 1) return a.v;
+  if (a.ro || b.li) return bezAt(a, b, t);
   const D = b.t - a.t; if (DIRECT[a.ease]) return a.v + (b.v - a.v) * DIRECT[a.ease]((t - a.t) / D);
   const u = (EASE[a.ease] || EASE.fluide)((t - a.t) / D), cut = k => k.ease === 'fixe' || !!DIRECT[k.ease];
   const p = i > 0 && !cut(L[i - 1]) ? L[i - 1] : null, q = i + 2 < n && !cut(b) ? L[i + 2] : null;

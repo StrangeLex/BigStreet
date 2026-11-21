@@ -40,12 +40,12 @@ export const LTYPES = { point: 'Ponctuelle (ampoule)', spot: 'Projecteur (spot)'
 export const POOL = { point: 4, spot: 3, dir: 1 };   // (réserve FIXE de lumières : en ajouter une ne recompile aucun shader)
 export const MAX = { objs: 200, miroir: 2, perso: 40, keys: 4000 };
 export const LABELS = { x: 'Position X', y: 'Position Y', z: 'Position Z', rx: 'Tangage', ry: 'Cap (lacet)', rz: 'Roulis', sx: 'Échelle X', sy: 'Échelle Y', sz: 'Échelle Z', vis: 'Visible',
-  shake: 'Tremblement', shakef: 'Fréquence du tremblement', fade: 'Fondu au noir', flash: 'Éclair blanc', speed: 'Vitesse (ralenti / accéléré)', vol: 'Volume', op: 'Opacité', tx: 'Décalage X', ty: 'Décalage Y', tsz: 'Grossissement',
+  shake: 'Tremblement', shakef: 'Fréquence du tremblement', fade: 'Fondu au noir', flash: 'Éclair blanc', speed: 'Vitesse (ralenti / accéléré)', pmix: 'Mélange de la pose', prog: 'Avancée sur le chemin', vol: 'Volume', op: 'Opacité', tx: 'Décalage X', ty: 'Décalage Y', tsz: 'Grossissement',
   expo: 'Luminosité de la scène', amb: 'Lumière ambiante', sun: 'Lumière principale', lamps: 'Lampes du lieu', lm: 'Intensité (× d’origine)',
   li: 'Intensité', lr: 'Portée', la: 'Angle du cône', cr: 'Rouge', cg: 'Vert', cb: 'Bleu',
   ...Object.fromEntries(BONES.flatMap(([b, n]) => ['x', 'y', 'z'].map(a => [`${b}.${a}`, `${n} ${a.toUpperCase()}`]))) };
-export const DEF = { sx: 1, sy: 1, sz: 1, vis: 1, li: 6, lr: 12, la: 0.6, cr: 1, cg: 1, cb: 1, expo: 1, amb: 1, sun: 1, lamps: 1, lm: 1, shake: 0, shakef: 8, fade: 0, flash: 0, speed: 1, op: 1, tx: 0, ty: 0, tsz: 1, vol: 1 };
-const LIM = { vis: [0, 1], sx: [0.01, 100], sy: [0.01, 100], sz: [0.01, 100], li: [0, 200], lr: [0.5, 200], la: [0.03, 1.5], cr: [0, 1], cg: [0, 1], cb: [0, 1], expo: [0, 4], amb: [0, 6], sun: [0, 6], lamps: [0, 8], lm: [0, 10], shake: [0, 1], shakef: [0.5, 40], fade: [0, 1], flash: [0, 1], speed: [0.05, 8], op: [0, 1], tx: [-100, 100], ty: [-100, 100], tsz: [0.05, 20], vol: [0, 2] };
+export const DEF = { sx: 1, sy: 1, sz: 1, vis: 1, li: 6, lr: 12, la: 0.6, cr: 1, cg: 1, cb: 1, expo: 1, amb: 1, sun: 1, lamps: 1, lm: 1, shake: 0, shakef: 8, fade: 0, flash: 0, speed: 1, op: 1, tx: 0, ty: 0, tsz: 1, vol: 1, pmix: 1, prog: 0 };
+const LIM = { vis: [0, 1], sx: [0.01, 100], sy: [0.01, 100], sz: [0.01, 100], li: [0, 200], lr: [0.5, 200], la: [0.03, 1.5], cr: [0, 1], cg: [0, 1], cb: [0, 1], expo: [0, 4], amb: [0, 6], sun: [0, 6], lamps: [0, 8], lm: [0, 10], shake: [0, 1], shakef: [0.5, 40], fade: [0, 1], flash: [0, 1], speed: [0.05, 8], op: [0, 1], tx: [-100, 100], ty: [-100, 100], tsz: [0.05, 20], vol: [0, 2], pmix: [0, 1], prog: [0, 1] };
 export const EASES = { fluide: 'lisse (courbe)', lineaire: 'linéaire', doux: 'départ et arrivée en douceur', accel: 'accélère', frein: 'ralentit', rebond: 'rebond (chute)', elastique: 'élastique', depasse: 'dépasse puis revient', fixe: 'constant (saut)' };
 const bounce = u => { const n = 7.5625, d = 2.75; if (u < 1 / d) return n * u * u; if (u < 2 / d) return n * (u -= 1.5 / d) * u + 0.75; if (u < 2.5 / d) return n * (u -= 2.25 / d) * u + 0.9375; return n * (u -= 2.625 / d) * u + 0.984375; };
 export const EASE = { fluide: u => u, lineaire: u => u, doux: u => u * u * (3 - 2 * u), accel: u => u * u, frein: u => 1 - (1 - u) * (1 - u), rebond: bounce,
@@ -60,12 +60,24 @@ const def = ch => DEF[ch] ?? 0;
 const isHex = c => typeof c === 'string' && /^#[0-9a-f]{6}$/i.test(c);
 export const isChar = o => o.kind === 'perso' || (o.kind === 'ref' && String(o.ref).startsWith('u:'));
 /** Les canaux d'un élément */
-export function channelsOf(o) { if (o.kind === 'effets') return FXC_CH; if (o.kind === 'titre') return TITLE_CH; if (o.kind === 'audio') return ['vol']; if (o.kind === 'ambiance') return AMB_CH; if (o.kind === 'lampe') return LAMP_CH; return [...TR, ...(isChar(o) ? BONE_CH : []), ...(o.kind === 'lumiere' ? LIGHT_CH : [])]; }
+export const CHAR_CH = ['pmix'];   // (personnages : mélange 0–1 entre l'animation du jeu et la pose posée)
+export function channelsOf(o) { if (o.kind === 'effets') return FXC_CH; if (o.kind === 'titre') return TITLE_CH; if (o.kind === 'audio') return ['vol']; if (o.kind === 'ambiance') return AMB_CH; if (o.kind === 'lampe') return LAMP_CH; return [...TR, ...(o.path ? ['prog'] : []), ...(isChar(o) ? [...BONE_CH, ...CHAR_CH] : []), ...(o.kind === 'lumiere' ? LIGHT_CH : [])]; }
 export const entKey = o => (o.kind === 'ref' ? o.ref : o.kind === 'perso' ? `u:${o.uid}` : null);
 export const UID0 = 9000000;   // (numéros des personnages ajoutés : loin de ceux du record)
 
 // ---------------------------------------------------------------- Pistes (valables pour tout ce qui a « tracks » : éléments, caméras)
-const cleanK = (ch, k) => ({ t: Math.max(0, Math.round(num(k.t))), v: ch === 'vis' ? (num(k.v, 1) >= 0.5 ? 1 : 0) : lim(ch, num(k.v, def(ch))), ease: EASE[k.ease] ? k.ease : ch === 'vis' ? 'fixe' : 'fluide' });
+// Poignées de tangente (Bézier), par clé : hm = 'aligne' (les deux poignées restent alignées) ou 'libre' ; li = [dt ≤ 0 (ms), dv] vers la
+// clé d'avant, ro = [dt ≥ 0, dv] vers la suivante. Sans hm : « auto » — la courbe choisie (ease) fait le segment.
+export const HMODES = { auto: 'Automatique (courbe choisie)', aligne: 'Poignées alignées', libre: 'Poignées libres' };
+export function cleanHandles(k) { if (k.hm !== 'aligne' && k.hm !== 'libre') return {}; const h = a => (Array.isArray(a) && Number.isFinite(+a[0]) && Number.isFinite(+a[1]) ? [+a[0], +a[1]] : null), li = h(k.li), ro = h(k.ro); if (!li && !ro) return {}; return { hm: k.hm, ...(li ? { li: [Math.min(0, li[0]), li[1]] } : {}), ...(ro ? { ro: [Math.max(0, ro[0]), ro[1]] } : {}) }; }
+/** Valeur à l'instant t du segment a → b tracé par ses poignées (courbe de Bézier cubique dans le plan temps / valeur) */
+export function bezAt(a, b, t) {
+  const D = b.t - a.t, o = a.ro || [D / 3, (b.v - a.v) / 3], i = b.li || [-D / 3, -(b.v - a.v) / 3];
+  const x1 = Math.min(D, Math.max(0, o[0])), x2 = D + Math.max(-D, Math.min(0, i[0])), X = u => 3 * (1 - u) * (1 - u) * u * x1 + 3 * (1 - u) * u * u * x2 + u * u * u * D;
+  let lo = 0, hi = 1; const want = t - a.t; for (let n = 0; n < 24; n++) { const m = (lo + hi) / 2; if (X(m) < want) lo = m; else hi = m; } const u = (lo + hi) / 2, w = 1 - u;
+  return w * w * w * a.v + 3 * w * w * u * (a.v + o[1]) + 3 * w * u * u * (b.v + i[1]) + u * u * u * b.v;
+}
+const cleanK = (ch, k) => ({ t: Math.max(0, Math.round(num(k.t))), v: ch === 'vis' ? (num(k.v, 1) >= 0.5 ? 1 : 0) : lim(ch, num(k.v, def(ch))), ease: EASE[k.ease] ? k.ease : ch === 'vis' ? 'fixe' : 'fluide', ...cleanHandles(k) });
 export const sortTrack = L => L.sort((a, b) => a.t - b.t);
 export const keyAt = (L, t, tol = TOL) => (L ? L.findIndex(k => Math.abs(k.t - t) <= tol) : -1);
 export function valAt(L, t, d = 0) {
@@ -73,6 +85,7 @@ export function valAt(L, t, d = 0) {
   if (t <= L[0].t) return L[0].v; if (t >= L[n - 1].t) return L[n - 1].v;
   let i = 0; while (i + 1 < n && L[i + 1].t <= t) i++;
   const a = L[i], b = L[i + 1]; if (a.ease === 'fixe' || b.t - a.t < 1) return a.v;
+  if (a.ro || b.li) return bezAt(a, b, t);
   const D = b.t - a.t, u0 = (t - a.t) / D;
   if (DIRECT.has(a.ease)) return a.v + (b.v - a.v) * EASE[a.ease](u0);
   const u = (EASE[a.ease] || EASE.fluide)(u0), smooth = k => k && !DIRECT.has(k.ease) && k.ease !== 'fixe';
@@ -105,14 +118,14 @@ export const lastKey = A => Math.max(0, ...A.objs.map(o => span(o)?.[1] || 0));
 // ---- Sélection multiple : des clés désignées par [{ ch, t }] sur un même porteur de pistes (élément ou caméra)
 /** Copie des clés : { t0, keys: [{ ch, dt, v, ease }] } (les instants deviennent relatifs à la première) */
 export function copyKeys(o, sel) {
-  const keys = []; for (const s of sel) for (const c of chans(o, s.ch)) { const k = (o.tracks[c] || [])[keyAt(o.tracks[c], s.t, 0)]; if (k && !keys.some(x => x.ch === c && x.t === k.t)) keys.push({ ch: c, t: k.t, v: k.v, ease: k.ease }); }
+  const keys = []; for (const s of sel) for (const c of chans(o, s.ch)) { const k = (o.tracks[c] || [])[keyAt(o.tracks[c], s.t, 0)]; if (k && !keys.some(x => x.ch === c && x.t === k.t)) keys.push({ ch: c, t: k.t, v: k.v, ease: k.ease, ...cleanHandles(k) }); }
   if (!keys.length) return null; const t0 = Math.min(...keys.map(k => k.t));
-  return { t0, keys: keys.map(k => ({ ch: k.ch, dt: k.t - t0, v: k.v, ease: k.ease })) };
+  return { t0, keys: keys.map(k => ({ ch: k.ch, dt: k.t - t0, v: k.v, ease: k.ease, ...cleanHandles(k) })) };
 }
 /** Colle des clés copiées à l'instant t (sur les canaux de même nom que porte la cible) ; rend [{ ch, t }] des clés posées */
 export function pasteKeys(o, clip, t, dur = Infinity, ok = null) {
   const out = []; if (!clip) return out;
-  for (const k of clip.keys) { const tt = Math.round(t + k.dt); if (tt > dur || !(k.ch in o.tracks || (ok && ok.includes(k.ch)))) continue; const L = o.tracks[k.ch] ||= []; const i = keyAt(L, tt, 0); if (i >= 0) L.splice(i, 1); L.push({ t: tt, v: k.v, ease: k.ease }); sortTrack(L); out.push({ ch: k.ch, t: tt }); }
+  for (const k of clip.keys) { const tt = Math.round(t + k.dt); if (tt > dur || !(k.ch in o.tracks || (ok && ok.includes(k.ch)))) continue; const L = o.tracks[k.ch] ||= []; const i = keyAt(L, tt, 0); if (i >= 0) L.splice(i, 1); L.push({ t: tt, v: k.v, ease: k.ease, ...cleanHandles(k) }); sortTrack(L); out.push({ ch: k.ch, t: tt }); }
   return out;
 }
 /** Décale des clés dans le temps (toutes ensemble, sans se croiser : bornées à [0, dur]) ; rend la nouvelle sélection */
@@ -136,7 +149,7 @@ export function scaleKeys(o, sel, k, dur = Infinity) {
 export function chanAt(o, ch, t) {
   const L = o.tracks[ch]; if (L && L.length) return lim(ch, valAt(L, t, def(ch)));
   if (o.st && Number.isFinite(o.st[ch])) return o.st[ch];
-  return o.kind === 'ref' || ch.includes('.') ? null : def(ch);
+  return (o.kind === 'ref' && ch !== 'pmix' && ch !== 'prog') || ch.includes('.') ? null : def(ch);
 }
 export const isSet = (o, ch) => !!(o.tracks[ch]?.length) || Number.isFinite(o.st?.[ch]);
 export const isAnimated = (o, ch) => (o.tracks[ch]?.length || 0) > 1;
@@ -190,6 +203,8 @@ export function localAt(o, t, base = null) {
   const B = o.kind === 'ref' && base ? base(o, t) : null, s = {};
   for (const ch of TR) { const v = chanAt(o, ch, t); s[ch] = v != null ? v : B && Number.isFinite(B[ch]) ? B[ch] : def(ch); }
   s.lost = o.kind === 'ref' && !!base && !B;
+  // (contrainte « suivre un chemin » : la position vient du chemin, à l'avancée « prog » — 0 au premier point, 1 au dernier)
+  if (o.path && o.path.pts.length >= 2) { const p = pathAt(o.path, chanAt(o, 'prog', t) ?? 0); s.x = p.x; s.y = p.y; s.z = p.z; if (o.path.orient !== false && (Math.abs(p.tx) + Math.abs(p.tz)) > 1e-6) s.ry = Math.atan2(p.tx, p.tz); }
   return s;
 }
 /**
@@ -230,6 +245,7 @@ export const POSES = {
   pointer_haut: P('Pointer vers le ciel', { bras_d: [-150, 0, 10], tete: [-28, 0, 0] }),
   bras_en_l_air: P('Les deux bras en l’air', { bras_d: [0, 0, 165], bras_g: [0, 0, -165], tete: [-10, 0, 0] }),
   t: P('En croix (pose en T)', { bras_d: [0, 0, 90], bras_g: [0, 0, -90] }),
+  bras_croises: P('Bras croisés', { bras_d: [-58, 0, -46], bras_g: [-58, 0, 46], tete: [3, 0, 0] }),
   mains_hanches: P('Mains sur les hanches', { bras_d: [12, 0, 38], bras_g: [12, 0, -38] }),
   bras_tendus: P('Bras tendus devant (somnambule)', { bras_d: [-90, 0, 0], bras_g: [-90, 0, 0] }),
   penser: P('Pensif, main au menton', { bras_d: [-128, 0, -18], bras_g: [-30, 0, 14], tete: [14, -10, 0] }),
@@ -262,7 +278,7 @@ export function applyPose(o, name, t, key = true, ease = null) {
 export function clearPose(o) { for (const ch of BONE_CH) clearChan(o, ch); }
 
 // ---------------------------------------------------------------- Création, lecture d'un projet
-export const emptyAnim = () => ({ v: ANIM_VERSION, seq: 1, auto: false, loop: { on: false, a: 0, b: 0 }, marks: [], objs: [] });
+export const emptyAnim = () => ({ v: ANIM_VERSION, seq: 1, auto: false, loop: { on: false, a: 0, b: 0 }, marks: [], focus: {}, objs: [] });   // (focus : { id de caméra: { key (entité « u:3 » ou élément « o:<id> »), name } } — mise au point du flou de profondeur)
 const uniq = (A, base) => { let name = base; for (let i = 2; A.objs.some(o => o.name === name); i++) name = `${base} ${i}`; return name; };
 /** Un élément neuf, ajouté au projet. props : ses réglages ; pose : { x, y, z, ry… } de départ (valeurs fixes) */
 export function newObj(A, kind, props = {}, pose = {}) {
@@ -311,6 +327,7 @@ export function cleanAnim(a) {
   A.seq = Math.max(1, Math.floor(num(a.seq, 1))); A.auto = !!a.auto;
   if (a.loop && typeof a.loop === 'object') A.loop = { on: !!a.loop.on, a: Math.max(0, Math.round(num(a.loop.a))), b: Math.max(0, Math.round(num(a.loop.b))) };
   if (Array.isArray(a.marks)) A.marks = a.marks.filter(m => m && Number.isFinite(+m.t)).slice(0, 200).map(m => ({ t: Math.max(0, Math.round(+m.t)), name: String(m.name || '').slice(0, 40), color: isHex(m.color) ? m.color : '#ffd23d' })).sort((x, y) => x.t - y.t);
+  if (a.focus && typeof a.focus === 'object') for (const [k, f] of Object.entries(a.focus).slice(0, 100)) if (/^[A-Za-z0-9_-]{1,40}$/.test(k) && f && typeof f.key === 'string' && /^[uvio]:[A-Za-z0-9_.:-]{1,40}$/.test(f.key)) A.focus[k] = { key: f.key, name: String(f.name || '').slice(0, 60) };
   const ids = new Set(), uids = new Set(), refs = new Set(); let keys = 0;
   for (const r of Array.isArray(a.objs) ? a.objs.slice(0, MAX.objs) : []) {
     if (!r || typeof r !== 'object' || !KINDS[r.kind]) continue;
@@ -325,6 +342,8 @@ export function cleanAnim(a) {
     if (o.kind === 'miroir') { o.w = clamp(num(r.w, 2), 0.2, 30); o.h = clamp(num(r.h, 2.4), 0.2, 30); o.tint = isHex(r.tint) ? r.tint : '#ffffff'; o.q = [256, 512, 1024, 2048].includes(+r.q) ? +r.q : 512; }
     if (o.kind === 'texte') { o.text = String(r.text ?? '').slice(0, 200); o.tcolor = isHex(r.tcolor) ? r.tcolor : '#ffffff'; o.size = clamp(num(r.size, 1), 0.1, 30); o.face = !!r.face; }
     if (o.kind === 'particules') { o.ptype = PTYPES[r.ptype] ? r.ptype : 'fumee'; o.count = Math.round(clamp(num(r.count, 150), 10, 1500)); o.pcolor = isHex(r.pcolor) ? r.pcolor : ''; o.psize = clamp(num(r.psize, 1), 0.1, 10); o.spread = clamp(num(r.spread, 1), 0.05, 100); }
+    if (r.path && Array.isArray(r.path.pts) && !noTR(o)) { const pts = r.path.pts.filter(q => Array.isArray(q) && q.length >= 3 && q.slice(0, 3).every(Number.isFinite)).slice(0, 200).map(q => [+q[0], +q[1], +q[2]]); if (pts.length >= 2) o.path = { pts, orient: r.path.orient !== false, closed: !!r.path.closed }; }
+    if (r.look && typeof r.look === 'object' && ['obj', 'ent', 'cam'].includes(r.look.kind) && typeof r.look.id === 'string' && r.look.id.length < 60 && !noTR(o)) o.look = { kind: r.look.kind, id: r.look.id, name: String(r.look.name || '').slice(0, 60) };
     const CH = channelsOf(o);
     if (r.st && typeof r.st === 'object') for (const ch of CH) if (Number.isFinite(r.st[ch])) o.st[ch] = cleanK(ch, { t: 0, v: r.st[ch] }).v;
     if (o.kind === 'lampe') { if (typeof r.lkey !== 'string' || !/^-?\d+(\.\d)?,-?\d+(\.\d)?,-?\d+(\.\d)?$/.test(r.lkey) || A.objs.some(x => x.lkey === r.lkey)) continue; o.lkey = r.lkey; }
@@ -349,7 +368,7 @@ export function cleanAnim(a) {
 /** Ramène toutes les clés dans la durée du record */
 export function clampAnim(A, dur) { for (const o of A.objs) { if (o.kind === 'titre') { o.t0 = clamp(o.t0, 0, Math.round(dur)); o.t1 = clamp(o.t1, 0, Math.round(dur)); } for (const L of Object.values(o.tracks)) for (const k of L) k.t = clamp(k.t, 0, Math.round(dur)); for (const k of o.clips || []) k.t = clamp(k.t, 0, Math.round(dur)); } for (const m of A.marks) m.t = clamp(m.t, 0, Math.round(dur)); A.loop.a = clamp(A.loop.a, 0, dur); A.loop.b = clamp(A.loop.b, 0, dur); return A; }
 /** Le projet a-t-il quelque chose à enregistrer ? */
-export const hasAnim = A => !!A && (A.objs.length > 0 || A.marks.length > 0 || A.loop.on);
+export const hasAnim = A => !!A && (A.objs.length > 0 || A.marks.length > 0 || A.loop.on || Object.keys(A.focus || {}).length > 0);
 /** Résumé d'un élément (panneau, assistant) */
 export function brief(A, o, t) {
   const w = worldAt(A, o, t), K = keyTimes(o), r = v => Math.round(v * 100) / 100, g = v => Math.round(v * 180 / Math.PI);
@@ -514,4 +533,49 @@ export function applyTemplate(C, cams, A, name, ctx) {
     newObj(A, 'titre', { text: ctx.title || ctx.place || 'Big Street', pos: 'bas_gauche', size: 6.5, t0: T(0.03), t1: T(0.25), fade: 600 });
   }
   return { cams: made, start: t0, end: T(1), notes: 'Les caméras déjà présentes sont écartées de la cinématique (rond ○ de leur piste), pas supprimées. Chaque plan se retouche : clés, focale, durée.' };
+}
+
+// ---------------------------------------------------------------- Contrainte « suivre un chemin »
+/** Le point d'un chemin { pts: [[x, y, z]…], closed } à l'avancée u (0–1) : { x, y, z, tx, ty, tz (direction) } — courbe lisse par ses points, à vitesse à peu près constante */
+export function pathAt(path, u) {
+  const P = path.pts, n = P.length; if (n < 2) return { x: P[0]?.[0] || 0, y: P[0]?.[1] || 0, z: P[0]?.[2] || 0, tx: 0, ty: 0, tz: 0 };
+  const segs = path.closed ? n : n - 1, at = i => (path.closed ? P[((i % n) + n) % n] : P[Math.max(0, Math.min(n - 1, i))]);
+  // (longueurs des segments : l'avancée est répartie selon la distance, pas selon le nombre de points)
+  const len = []; let tot = 0; for (let i = 0; i < segs; i++) { const a = at(i), b = at(i + 1), d = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]); len.push(d); tot += d; }
+  let d = Math.max(0, Math.min(1, u)) * tot, i = 0; while (i < segs - 1 && d > len[i]) { d -= len[i]; i++; } const k = len[i] > 1e-9 ? d / len[i] : 0;
+  const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2), k2 = k * k, k3 = k2 * k, out = { x: 0, y: 0, z: 0, tx: 0, ty: 0, tz: 0 };
+  ['x', 'y', 'z'].forEach((ax, j) => { const a = p0[j], b = p1[j], c = p2[j], e = p3[j]; out[ax] = 0.5 * (2 * b + (c - a) * k + (2 * a - 5 * b + 4 * c - e) * k2 + (3 * b - a - 3 * c + e) * k3); out['t' + ax] = 0.5 * ((c - a) + 2 * (2 * a - 5 * b + 4 * c - e) * k + 3 * (3 * b - a - 3 * c + e) * k2); });
+  return out;
+}
+/** Angles pour qu'un élément placé en from regarde to : { ry, rx } — down : c'est son axe −Y qui vise (projecteur), sinon son avant (+Z) */
+export function aimAt(from, to, down = false) { const dx = to.x - from.x, dy = to.y - from.y, dz = to.z - from.z, h = Math.hypot(dx, dz); if (h + Math.abs(dy) < 1e-6) return null; return { ry: Math.atan2(dx, dz), rx: down ? -Math.atan2(h, -dy) : -Math.atan2(dy, h) }; }
+
+// ---------------------------------------------------------------- Bibliothèque de l'utilisateur : poses et morceaux d'animation (.bspose)
+/** Une pose (rotations des os à l'instant t) à garder : { bspose: 1, kind: 'pose', name, bones: { canal: valeur } } ou null si rien n'est posé */
+export function capturePose(o, t, name) { const b = bonesAt(o, t); return Object.keys(b).length ? { bspose: 1, kind: 'pose', name: String(name || 'Pose').slice(0, 40), bones: b } : null; }
+/**
+ * Un morceau d'animation à garder : toutes les clés de l'élément entre a et b (instants relatifs au début ; positions x / y / z en écarts par
+ * rapport à la première clé, pour être rejouées ailleurs). { bspose: 1, kind: 'anim', name, dur, tracks: { canal: [{ dt, v, ease… }] } } ou null.
+ */
+export function captureAnim(o, a, b, name, only = null) {
+  const tracks = {}; let t0 = Infinity, t1 = -Infinity;
+  for (const [ch, L] of Object.entries(o.tracks)) { if (only && !only(ch)) continue; const K = L.filter(k => k.t >= a && k.t <= b); if (!K.length) continue; tracks[ch] = K; t0 = Math.min(t0, K[0].t); t1 = Math.max(t1, K[K.length - 1].t); }
+  if (!Object.keys(tracks).length) return null;
+  for (const ch of Object.keys(tracks)) { const rel = POS.includes(ch) ? tracks[ch][0].v : 0; tracks[ch] = tracks[ch].map(k => ({ dt: k.t - t0, v: k.v - rel, ease: k.ease, ...cleanHandles(k) })); }
+  return { bspose: 1, kind: 'anim', name: String(name || 'Animation').slice(0, 40), dur: t1 - t0, rel: POS.filter(c => tracks[c]), tracks };
+}
+/** Lit une entrée de bibliothèque (ou un fichier .bspose) : tout l'illisible est écarté ; null si ce n'en est pas une */
+export function cleanSaved(e) {
+  if (!e || typeof e !== 'object' || (e.kind !== 'pose' && e.kind !== 'anim')) return null; const name = String(e.name || '').slice(0, 40) || 'Sans nom', okCh = ch => typeof ch === 'string' && (LABELS[ch] !== undefined);
+  if (e.kind === 'pose') { const bones = {}; for (const [ch, v] of Object.entries(e.bones || {})) if (BONE_CH.includes(ch) && Number.isFinite(+v)) bones[ch] = +v; return Object.keys(bones).length ? { bspose: 1, kind: 'pose', name, bones } : null; }
+  const tracks = {}; for (const [ch, L] of Object.entries(e.tracks || {})) { if (!okCh(ch) || !Array.isArray(L)) continue; const K = L.filter(k => k && Number.isFinite(+k.dt) && Number.isFinite(+k.v)).slice(0, 2000).map(k => ({ dt: Math.max(0, Math.round(+k.dt)), v: +k.v, ease: EASE[k.ease] ? k.ease : 'fluide', ...cleanHandles(k) })); if (K.length) tracks[ch] = K; }
+  return Object.keys(tracks).length ? { bspose: 1, kind: 'anim', name, dur: Math.max(0, ...Object.values(tracks).flat().map(k => k.dt)), rel: POS.filter(c => tracks[c]), tracks } : null;
+}
+/** Applique une entrée gardée à un élément à l'instant t (sur les canaux qu'il porte) ; rend le nombre de clés posées */
+export function applySaved(o, e, t, dur = Infinity) {
+  const CH = channelsOf(o); let n = 0; t = Math.round(t);
+  if (e.kind === 'pose') { for (const [ch, v] of Object.entries(e.bones)) if (CH.includes(ch)) { setKey(o, ch, t, v); n++; } return n; }
+  for (const [ch, L] of Object.entries(e.tracks)) { if (!CH.includes(ch)) continue; const base = (e.rel || []).includes(ch) ? (chanAt(o, ch, t) ?? 0) : 0;
+    for (const k of L) { const tt = t + k.dt; if (tt > dur) continue; const T0 = o.tracks[ch] ||= [], i = keyAt(T0, tt, 0); if (i >= 0) T0.splice(i, 1); T0.push(cleanK(ch, { t: tt, v: k.v + base, ease: k.ease, hm: k.hm, li: k.li, ro: k.ro })); n++; } sortTrack(o.tracks[ch]); }
+  return n;
 }

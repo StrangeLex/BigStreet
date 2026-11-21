@@ -203,6 +203,7 @@ const sceneHost = {
   // (pour anim.js : la position du record sans les surcharges, la frise, la sélection de clé des caméras)
   rawPos(kind, id, t) { const f = frameRaw({ kind, id }, t); return f ? { x: f.x, y: f.y - ORIGIN_Y[kind], z: f.z, yaw: f.yaw } : null; },
   api, get xpHost() { return xpHost; }, get rate() { return rate; }, refreshUi: () => refreshUi(),
+  frame: (p, t) => frame(p, t), selectCamKey: (id, t) => selectCam(id, null, t, true),   // (trajectoires dans la vue : un point de clé cliqué)
   get scene() { return scene; }, get playing() { return playing; }, get selT() { return selT; }, get selCh() { return selCh; }, seek: t => { if (mode === 'cine') stopCine(); seek(t); },
   renderTracks: () => renderTracks(), renderProps: () => renderProps(), scrub: (e, lane) => scrub(e, lane), entExtra: e => anim?.entExtra(e) || [],
   setParentOf(c, e) { const kind = e.kind === 'vehicule' ? 'vehicule' : 'perso'; rebase(c, () => { c.parent = { kind, id: e.id, name: e.name }; if (kind === 'vehicule') c.follow = true; }); selectCam(c.id); touch(); hint(`${c.name} suit maintenant ${e.name}.`, 3000); },
@@ -669,7 +670,8 @@ function syncSettings() {
 }
 
 // La mise au point du flou de profondeur : le parent de la caméra ; sinon le personnage le plus proche de l'axe du regard ; sinon 12 m
-function focusOf(w) {
+function focusOf(w, c = null) {
+  const chosen = c && anim ? anim.focusDist(c, w) : null; if (chosen) return chosen;   // (sujet de mise au point choisi pour cette caméra : anim.js)
   if (w.P && !w.pov) return Math.max(0.4, Math.hypot(w.P.x - w.x, w.P.y - w.y, w.P.z - w.z));
   const cp = Math.cos(w.pitch), f = [Math.cos(w.yaw) * cp, Math.sin(w.pitch), Math.sin(w.yaw) * cp]; let best = 12, score = 0.955;   // (à moins de 17° de l'axe)
   for (const a of world.avatars.values()) { if (!a.group.visible) continue; const p = a.group.position, d = [p.x - w.x, p.y + 1.4 - w.y, p.z - w.z], L = Math.hypot(...d); if (L < 0.3 || L > 60) continue; const k = (d[0] * f[0] + d[1] * f[1] + d[2] * f[2]) / L; if (k > score) { score = k; best = L; } }
@@ -701,7 +703,7 @@ function draw() {
   const w = shot && wpose(shot);
   if (mode !== 'pov') { const pv = w?.pov ? shot : mode === 'free' && selCam()?.pov ? selCam() : null; povCam(pv ? pv.parent.id : null); }   // (caméra subjective à l'image ou dans l'aperçu : la tête de son personnage est masquée)
   if (w) for (const c of CH) cam[c] = w[c]; else if (mode === 'cam') setMode('free');
-  if (w) { fx.use(fxOf(shot, T), focusOf(w)); world.post = fx.active ? fx : null; } else if (world.post) world.post = null;
+  if (w) { fx.use(fxOf(shot, T), focusOf(w, shot)); world.post = fx.active ? fx : null; } else if (world.post) world.post = null;
   pb.eye = { x: cam.x, z: cam.z, r: view.dist + 10 };
   try {
     pb.step(T, seekNext); seekNext = false;
@@ -713,7 +715,7 @@ function draw() {
     world.frame();
     // (l'aperçu incrusté : ce que voit la caméra sélectionnée à cet instant — pas quand on regarde déjà à travers une caméra)
     const pc = show ? selCam() : null, pw = pc && wpose(pc), box = $('#pip');
-    if (pw && pip) { if (box.hidden) { box.hidden = false; $('#stage').classList.add('has-pip'); } if (pip.draw(pw, fxOf(pc, T), focusOf(pw), aspect, now, playing ? 140 : 260)) { const nm = `🎥 ${pc.name} · ${fmt(T)}`; if ($('#pipName').textContent !== nm) $('#pipName').textContent = nm; $('#stage').style.setProperty('--pip-h', `${$('#pip').offsetHeight}px`); } }
+    if (pw && pip) { if (box.hidden) { box.hidden = false; $('#stage').classList.add('has-pip'); } if (pip.draw(pw, fxOf(pc, T), focusOf(pw, pc), aspect, now, playing ? 140 : 260)) { const nm = `🎥 ${pc.name} · ${fmt(T)}`; if ($('#pipName').textContent !== nm) $('#pipName').textContent = nm; $('#stage').style.setProperty('--pip-h', `${$('#pip').offsetHeight}px`); } }
     else if (!box.hidden) { box.hidden = true; $('#stage').classList.remove('has-pip'); }
   } catch (e) { if (!loop.err) { loop.err = true; console.error(e); toast('Erreur d’affichage : ' + (e.message || e), true); } }
   loop.n = (loop.n || 0) + 1;

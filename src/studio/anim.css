@@ -43,3 +43,23 @@
 .an-panel small.muted, #entPanel small.muted { white-space: normal; overflow-wrap: anywhere; }
 .an-ov { position: absolute; inset: 0; width: 100%; height: 100%; }
 .an-block { position: absolute; top: 2px; height: calc(100% - 4px); border-radius: 4px; background: color-mix(in srgb, var(--c) 22%, transparent); border: 1px solid color-mix(in srgb, var(--c) 60%, transparent); cursor: grab; }
+.an-graph { position: absolute; left: 10px; right: 312px; bottom: 10px; height: 200px; z-index: 5; display: grid; grid-template-rows: auto 1fr; gap: 4px; padding: 8px 10px; border-radius: 12px; background: rgba(14, 19, 31, .94); border: 1px solid var(--line); }
+.an-graph-bar { display: flex; align-items: center; gap: 8px; font-size: 12px; } .an-graph-bar select { color: var(--txt); padding: 2px 6px; max-width: 210px; } .an-graph-bar .btn.small { height: 23px; }
+.an-graph-cv { width: 100%; height: 100%; min-height: 0; background: #0a0e18; border-radius: 8px; cursor: crosshair; }
+.an-focus { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px; font-size: 12px; color: var(--mut); } .an-focus select { color: var(--txt); min-width: 0; }
+.an-graph-bar label { display: inline-flex; align-items: center; gap: 4px; color: var(--mut); white-space: nowrap; }
+.an-tour { margin: 6px 10px; padding: 10px 12px; border-radius: 10px; background: #1d2540; border: 1px solid var(--acc); display: grid; gap: 6px; flex: none; font-size: 12.5px; }
+.an-tour-h { display: flex; justify-content: space-between; gap: 8px; } .an-tour-h small { color: var(--mut); } .an-tour p { margin: 0; line-height: 1.35; color: #d5dcf0; }
+.an-tour-mark { outline: 2px dashed var(--acc); outline-offset: -2px; }
+/* Finition (21/11) : barre d'ajout rangée par familles, champs sombres, frise qui tient en 1366 px */
+.an-add { display: grid; gap: 3px; } .an-fam { display: grid; grid-template-columns: 74px 1fr; align-items: center; gap: 4px; } .an-fam > small { color: var(--mut); font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; } .an-fam > div { display: flex; flex-wrap: wrap; gap: 3px; }
+.an-panel textarea, #entPanel textarea, .an-panel input, .an-cat input { background: #0c111d; border: 1px solid var(--line); border-radius: 7px; color: var(--txt); }
+@media (max-width: 1500px) { #dock .tl-row { gap: 6px; } #dock .tl-row .btn { padding: 0 8px; font-size: 12px; } #dock .tl-row .time { font-size: 12px; } #dock .tl-row #rate { width: 62px; } #dock .tl-row .sep { margin: 0 2px; } }
+@media (max-width: 1400px) { #dock .tl-row .btn { padding: 0 6px; } #gMove, #gRot, #camView, #preview, #export, #addKey { letter-spacing: -.01em; } #topbar .tb { padding: 0 8px; } }
+@media (max-width: 1400px) { #dock .tl-row .time { min-width: 104px; } }
+#help, #settings { z-index: 8; }
+/* L'onglet Scène défile d'un seul tenant (barre d'ajout, éléments, puis entités du record) ; la recherche reste en haut */
+#tabScene { overflow-y: auto; } #tabScene > #sceneTree { overflow: visible; flex: none; } #tabScene > #sceneSearch { position: sticky; top: 0; z-index: 3; flex: none; box-shadow: 0 6px 8px -4px rgba(8, 11, 20, .9); }
+#tabScene::-webkit-scrollbar { width: 6px; } #tabScene::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+.an-box { max-height: none; overflow: visible; } .an-fam { grid-template-columns: 62px 1fr; } .an-fam > small { font-size: 9.5px; } .an-add .btn.small { height: 22px; padding: 0 6px; font-size: 11px; }
+#help { max-height: calc(100% - 64px); overflow-y: auto; } #help::-webkit-scrollbar { width: 6px; } #help::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; } #help td { padding: 2px 6px 2px 0; vertical-align: top; }

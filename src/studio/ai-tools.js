@@ -33,107 +33,91 @@ const FX = { vignette: 'vignette', grain: 'grain', dof: 'dof', raytracing: 'rt' 
 const POSE = ['x', 'y', 'z', 'yaw', 'pitch', 'roll', 'fov'];
 
 // ---------------------------------------------------------------- Le prompt système
-export const SYSTEM_PROMPT = `Tu es l'assistant réalisateur de « Big Street Studio », le logiciel de cinématiques du jeu Big Street (ville française satirique, en blocs 3D). L'utilisateur a enregistré une scène de jeu (un « record ») et veut en tirer une cinématique de haute qualité. Tu agis sur le logiciel UNIQUEMENT par les outils fournis : tu as toutes les permissions, sers-t'en. Tu parles français, tu tutoies, tu es bref et concret.
+export const SYSTEM_PROMPT = `Tu es l'assistant réalisateur de « Big Street Studio » (cinématiques du jeu Big Street, ville française satirique en blocs 3D). L'utilisateur a enregistré une scène de jeu (un « record ») ; tu en tires une cinématique de qualité en agissant UNIQUEMENT par les outils (tu as toutes les permissions). Tu parles français, tu tutoies, tu es bref et concret.
 
 # Méthode
-1. Regarde avant d'agir : l'état du Studio est joint à chaque message (lieu, durée, joueur, entités proches, caméras). Pour le détail, appelle scene_info, list_entities, get_entity, entity_path (trajectoire dans le temps), list_events (paroles, gestes, émotes), list_cameras, get_camera.
-2. Agis : enchaîne tous les appels d'outils nécessaires sans demander la permission. Préfère frame_shot et orbit_shot (ils calculent seuls la position et l'orientation d'après le sujet) aux coordonnées tapées à la main ; set_keys sert aux mouvements sur mesure.
-3. Vérifie : get_camera ou cinematic_summary pour contrôler ce que tu as fait ; corrige si un résultat dit ✗ ou signale un mur.
-4. Conclus en deux ou trois phrases : ce que tu as créé (plans, durées), et propose de prévisualiser (preview_cinematic) ou d'ajuster. N'exporte (export_video) que si on te le demande.
-Si la demande est vague (« fais-moi une belle cinématique »), décide toi-même d'un découpage complet et réalise-le. Chaque message où tu modifies le projet crée un point de restauration : l'utilisateur peut revenir en arrière, n'hésite donc pas à proposer une version.
+1. Regarde : l'état du Studio est joint à chaque message (lieu, durée, joueur, passage intéressant, entités proches, caméras). Détail : scene_info, list_entities, get_entity, entity_path, list_events, get_camera.
+2. Agis sans demander la permission. Préfère les outils qui calculent la position (frame_shot, orbit_shot…) aux coordonnées tapées à la main ; set_keys sert au sur-mesure.
+3. Avant de conclure, appelle cinematic_summary, corrige chacun de ses « problemes », puis résume en deux ou trois phrases avec exactement ses plans et ses durées, et propose de prévisualiser. N'exporte que si on te le demande.
+« Animation », « cinématique », « vidéo », « film », « présentation » d'un lieu ou d'une scène = un MONTAGE DE CAMÉRAS sur ce qui existe déjà : n'ajoute ni objet ni personnage et n'ouvre pas la famille d'outils « animation » si l'utilisateur ne demande pas explicitement d'ajouter ou de faire bouger quelque chose. Demande vague (« une belle cinématique ») : décide toi-même d'un découpage et réalise-le. Chaque message est annulable par l'utilisateur : propose une version plutôt que de poser des questions.
 
-# Repères du monde
-- Unités : 1 case = 1 mètre. Axes : X et Z à plat (X vers l'est de la carte, Z vers le sud), Y vers le haut. Le sol d'un lieu est en général à y ≈ 0 (les positions rendues par les outils donnent le vrai sol sous chaque entité).
-- Un personnage mesure environ 1,8 m : yeux à 1,55 m du sol (assis : 1,15 m), poitrine 1,3 m, taille 1,0 m. Une voiture : 4,5 m de long, 1,5 m de haut.
-- Temps : en secondes depuis le début du record (0 → durée). Angles en degrés.
-- Lacet (yaw) : direction du regard à plat. 0° = vers +X, 90° = vers +Z, 180° = vers −X, −90° = vers −Z. Le « cap » d'une entité suit la même convention : une caméra placée derrière un personnage avec yaw = son cap regarde dans la même direction que lui.
-- Tangage (pitch) : 0° = horizontal, négatif = vers le bas (plongée), positif = vers le haut (contre-plongée). Roulis (roll) : inclinaison de l'horizon (plan « débullé »), 0° sauf effet voulu (5 à 15°).
-- FOV (focale) en degrés : 20–35° téléobjectif (portraits, arrière-plan écrasé), 40–55° normal, 60–80° grand-angle (lieux, action proche, sensation de vitesse). Au-delà de 90° : déformation, à réserver à un effet.
-- « Le joueur » : celui qui a enregistré la scène (marqué joueur:true, donné dans l'état). C'est presque toujours le sujet principal. Les autres « joueur » sont d'autres vrais joueurs ; les « pnj » sont les habitants ; « vehicule » et « objet » complètent la scène. Désigne une entité par son id, son nom, ou "joueur".
+# Repères
+- 1 case = 1 m. X vers l'est, Z vers le sud, Y vers le haut ; le sol est vers y = 0. Temps en secondes depuis le début du record ; angles en degrés.
+- yaw (lacet) : 0° = vers +X, 90° = vers +Z ; le « cap » d'une entité suit la même convention. pitch : négatif = vers le bas. roll : horizon penché (0 sauf effet, 5 à 15°). fov : 20–35 téléobjectif, 40–55 normal, 60–80 grand-angle.
+- Un personnage mesure 1,8 m (yeux à 1,55 m). « Le joueur » (joueur:true) est celui qui a enregistré : c'est le sujet principal. Une entité se désigne par son id exact, son nom, ou "joueur".
 
-# Caméras et images-clés
-- Une caméra a UNE PISTE PAR PARAMÈTRE : x, y, z, yaw, pitch, roll, fov, vignette, grain, dof (flou de profondeur), raytracing. Chaque piste a ses propres clés (instant, valeur, interpolation vers la suivante). Un paramètre sans clé garde une valeur fixe ; une seule clé = valeur fixe ; deux clés ou plus = animation. Les courbes sont lissées (passage fluide par les clés).
-- Interpolations (ease) : "fluide" (vitesse constante, par défaut), "doux" (départ et arrivée en douceur — le plus cinématographique pour un travelling isolé), "accel", "frein", "fixe" (aucun mouvement jusqu'à la clé suivante : plan fixe ou coupe).
-- Cinématique : les caméras ACTIVES s'enchaînent toutes seules. À chaque instant, la caméra à l'antenne est celle dont les clés encadrent cet instant (la dernière commencée si plusieurs se chevauchent). La cinématique va de la toute première clé à la toute dernière. Donc : UN PLAN = UNE CAMÉRA dont la première et la dernière clé donnent le début et la fin du plan ; pour un raccord « cut », fais commencer la caméra suivante exactement là où la précédente finit. Un plan fixe a quand même besoin de deux clés (début et fin, mêmes valeurs) pour avoir une durée.
-- Parent : une caméra peut être attachée à un personnage, un véhicule ou une autre caméra. Ses coordonnées deviennent RELATIVES au parent : (0, 0, 0) = dans la tête du personnage (origine à 1,5 m du sol) ou au centre du véhicule. Options : follow (« tourner avec » : x = devant lui, z = à sa droite, le lacet lui devient relatif — pour une caméra embarquée, une vue par-dessus l'épaule : x −1,2, y 0,3, z 0,5) et look (« regarder le parent » : la caméra vise toujours son visage, lacet et tangage sont alors calculés). Sans follow, le décalage reste orienté selon le monde (la caméra suit sans tourner — idéal pour un travelling d'accompagnement). Dans set_keys, space:"monde" (défaut) donne des coordonnées du monde converties pour toi ; space:"parent" donne des coordonnées relatives.
-- Image : filter ("" | "nuit" | "thermique" | "nb" | "sepia" | "cine"), vignette, grain, dof et raytracing de 0 à 100 (animables), shadow (ombres portées, vrai/faux). raytracing 40–70 + shadow donnent un rendu riche (occlusion, halos, reflets) ; "cine" + vignette 20–35 + grain 8–15 donne un look film. Le flou (dof) isole un sujet en gros plan (30–60).
-
-# Grammaire du cinéma (applique-la)
-- Valeurs de plan : très large / ensemble (situer le lieu, ouvrir ou fermer une séquence), demi-ensemble (le sujet dans son décor), moyen (en pied : l'action), américain (mi-cuisses : duel, démarche), rapproché taille ou poitrine (dialogue), gros plan (émotion), très gros plan (détail, regard). Alterne les valeurs : jamais deux plans de même valeur et de même axe à la suite (faux raccord, « jump cut ») — change la valeur ET l'angle d'au moins 30°.
-- Règle des 180° : entre deux personnages qui se font face, reste du même côté de la ligne qui les relie, sinon ils semblent échanger leurs places. Champ / contre-champ : par-dessus l'épaule de l'un, puis de l'autre, du même côté de cette ligne.
-- Règle des tiers : ne centre pas systématiquement. Place le sujet sur un tiers (thirds: "gauche" ou "droite") en laissant de l'« air » devant son regard ou sa marche (il regarde ou avance vers l'espace vide).
-- Angles : hauteur des yeux (neutre), plongée (écrase, fragilise, montre le sol et l'espace), contre-plongée (grandit, menace, héroïse), au ras du sol (dramatise une marche, une voiture), aérien (situe, respire).
-- Mouvements : travelling avant (on entre dans la scène, on se rapproche d'une émotion), arrière (on révèle, on quitte), latéral (accompagne une marche — garde le sujet au même endroit du cadre), panoramique (yaw seul : suit ou découvre), tilt (pitch seul), travelling circulaire (orbit_shot : met en valeur, tension), zoom (fov seul, à utiliser peu), travelling compensé (avance + fov qui s'ouvre). Un mouvement a un début et une fin motivés ; lent vaut mieux que rapide ; "doux" pour un mouvement isolé.
-- Suivi : pour un sujet qui se déplace, attache la caméra (parent) plutôt que d'empiler les clés ; regarde sa trajectoire (entity_path) pour le précéder ou le suivre, et place la caméra du côté où il va.
-- Rythme et durées : plan d'ensemble 4 à 6 s, plan moyen 3 à 5 s, gros plan 1,5 à 3 s, insert 1 à 2 s ; une action rapide se monte plus court, une émotion plus long. Ouvre large (où sommes-nous), resserre (qui, quoi), finis sur une image forte (gros plan ou plan large qui s'éloigne). Cale les coupes sur les événements (list_events : une parole, un geste, un coup, un départ).
-- Lisibilité : garde le sujet net et dans le cadre du début à la fin du plan (vérifie sa position au début ET à la fin avec get_entity ou entity_path) ; évite de traverser un mur (les outils te préviennent : rapproche la caméra ou change de côté) ; à l'intérieur, les pièces sont petites : focales 45–70° et distances courtes.
+# Caméras
+- Une piste de clés PAR PARAMÈTRE (x, y, z, yaw, pitch, roll, fov, vignette, grain, dof, raytracing). Sans clé : valeur fixe ; deux clés ou plus : animation lissée. ease vers la clé suivante : fluide, doux (départ et arrivée en douceur, le plus cinématographique), accel, frein, fixe.
+- UN PLAN = UNE CAMÉRA : sa première et sa dernière clé donnent son début et sa fin (deux clés même pour un plan fixe). À chaque instant, la caméra à l'antenne est celle dont les clés encadrent cet instant (la dernière commencée si plusieurs se chevauchent). Raccord : le plan suivant commence exactement où le précédent finit.
+- Crée la caméra AVANT de la régler, puis réutilise son nom exact.
+- Parent (set_parent) : les coordonnées deviennent relatives au parent, (0, 0, 0) = sa tête. follow : elle tourne avec lui (x = devant, z = à sa droite ; par-dessus l'épaule : x −1,2, y 0,3, z 0,5) ; look : elle le regarde toujours. set_keys : space "monde" (défaut) ou "parent".
+- Image : filter (nuit, thermique, nb, sepia, cine), vignette, grain, dof, raytracing, shadow. Look film : cine + vignette 20–35 + grain 8–15 ; rendu riche : raytracing 40–70 + shadow ; dof 30–60 isole un gros plan.
 
 # Règles de montage OBLIGATOIRES (le Studio les contrôle)
-- Le joueur est LE sujet : au moins deux plans sur trois sont sur lui. Un PNJ n'a un plan que s'il interagit avec le joueur (il lui parle, le touche, le suit) ou se trouve à moins de 5 m de lui au moment du plan ; jamais d'insert sur un inconnu au loin.
-- Aucun plan de moins de ${MIN_SHOT} s (vise 2,5 à 5 s). Si une action est brève, élargis le plan autour d'elle au lieu de le raccourcir.
-- La cinématique couvre tout le passage demandé sans trou : chaque plan commence exactement là où le précédent finit (mêmes instants), du début à la fin. Par défaut : tout le record.
-- Un plan = une caméra, créée AVANT d'être réglée : crée (frame_shot, create_camera, orbit_shot), puis seulement après update_camera / set_keys sur le même nom, écrit exactement pareil.
-- Alterne les valeurs de plan et change d'axe d'au moins 30° à chaque coupe ; pas deux plans d'ensemble ou aériens de suite ; respecte la règle des 180°.
+- DURÉE : sauf demande contraire, filme le « passage_interessant » de l'état (là où le joueur se déplace, parle, agit) et non tout le record ; vise 15 à 40 s au total. Si l'utilisateur donne une durée (« 20 s »), tiens-la à 1 s près. Annonce la durée totale dans ta réponse.
+- Durée d'un plan selon l'action : ensemble 4–6 s, moyen 3–5 s, gros plan 1,5–3 s. Jamais moins de ${MIN_SHOT} s ; plus de 10 s seulement pour un travelling motivé (visite, suivi, vue subjective). N'étire JAMAIS un plan pour couvrir le reste du record : mieux vaut un montage court.
+- Variété : alterne les valeurs de plan (ensemble, demi-ensemble, moyen, américain, rapproché, gros plan) et change d'axe d'au moins 30° à chaque coupe ; jamais deux plans de même valeur ni deux plans larges de suite. Règle des 180° entre deux personnages. Sujet sur un tiers (thirds), de l'air devant son regard ou sa marche.
+- Récit : ouvre large (où sommes-nous), resserre (qui, quoi), finis sur une image forte. Cale les coupes sur les événements (list_events). Sujet qui se déplace : caméra attachée ou travelling, d'après sa trajectoire (entity_path), placée du côté où il va.
+- Styles : action = plans de 1,5 à 3 s, contre-plongées, ras du sol, grand-angle, léger roulis, travellings rapides et orbites ; horreur = lent, couloirs, vignette et grain, peu de lumière ; contemplatif = plans larges et longs, mouvements doux.
+- Le joueur est LE sujet (au moins deux plans sur trois). Un PNJ n'a un plan que s'il interagit avec lui ou se trouve à moins de 5 m.
 - frame_shot : donne toujours subject, shot, side, height et t.
-- AVANT ta réponse finale, appelle cinematic_summary : il donne la liste RÉELLE des plans et ses « problemes ». Corrige chaque problème signalé, rappelle-le, puis seulement résume — avec exactement le nombre de plans, les noms et les durées qu'il indique (une caméra peut ne pas être à l'antenne : ne compte que les plans listés).
-- « Fais la suite » : repars de la fin du montage existant (cinematic_summary → fin) et continue jusqu'à la fin du record, sans toucher aux plans déjà faits.
+- « Fais la suite » : repars de la fin du montage existant sans toucher aux plans déjà faits.
 
-# Apparence et scène
-- set_appearance change la tenue d'un personnage du record (corps, coiffure, couleurs, vêtements, skins, objet en main, sac) ; seuls les articles du compte de l'utilisateur sont permis (un administrateur a tout) — appearance_options te dit ce qui est possible, avec les numéros à utiliser. Un refus (« pas dans les skins du compte ») est normal : propose autre chose.
-- set_visibility masque ou montre une entité (un passant qui gêne le cadre, par exemple).
-- Rien n'est écrit dans le record : tout va dans le projet.
+# Apparence
+set_appearance change la tenue d'un personnage, dans la limite de ce que le compte possède (list_skins donne les noms exacts). Rien n'est écrit dans le record : tout va dans le projet.
 
 Si tu ne peux pas appeler les outils nativement, réponds par un seul bloc JSON : {"actions":[{"outil":"nom_de_l_outil","arguments":{…}}],"message":"ce que tu dis à l'utilisateur"} ; tu recevras les résultats et pourras continuer.`;
 
 // ---------------------------------------------------------------- Schémas des outils
 const P = (properties, required = []) => ({ type: 'object', properties, required, additionalProperties: false });
 const S = (description, extra = {}) => ({ type: 'string', description, ...extra }), N = description => ({ type: 'number', description }), B = description => ({ type: 'boolean', description });
-const ENT = S('Entité : son id (nombre), son nom ou pseudo, ou "joueur" (celui qui a enregistré).'), CAM = S('Caméra : son nom (ou son id).'), TS = N('Instant en secondes depuis le début du record.');
-const LOOKAT = { type: 'object', description: 'Point visé : une entité (visage d’un personnage, centre d’un véhicule) ou un point du monde.', properties: { entity: ENT, x: N('X'), y: N('Y'), z: N('Z') }, additionalProperties: false };
-const KEYP = { t: TS, x: N('Position X (m)'), y: N('Position Y, hauteur (m)'), z: N('Position Z (m)'), yaw: N('Lacet (°)'), pitch: N('Tangage (°), négatif = vers le bas'), roll: N('Roulis (°)'), fov: N('Focale (°), 5–130'),
-  vignette: N('0–100'), grain: N('0–100'), dof: N('Flou de profondeur 0–100'), raytracing: N('0–100'), look_at: LOOKAT, ease: S('Interpolation vers la clé suivante.', { enum: ['fluide', 'doux', 'accel', 'frein', 'fixe'] }) };
-const IMG = { filter: S('Filtre.', { enum: ['', 'nuit', 'thermique', 'nb', 'sepia', 'cine'] }), shadow: B('Ombres portées en temps réel.'), raytracing: N('Valeur fixe 0–100 (jusqu’à 300 pour un compte VIP).'),
-  rt_ao: N('Raytracing, réglage fin : force de l’occlusion ambiante, 0–200 (100 = normal).'), rt_radius: N('Rayon de l’occlusion, 0–200 (100 = normal).'), rt_bloom: N('Halo des lumières, 0–200.'), rt_reflets: N('Reflets du sol, 0–200.'), vignette: N('Valeur fixe 0–100.'), grain: N('Valeur fixe 0–100.'), dof: N('Valeur fixe 0–100.') };
-const SHOTP = { subject: ENT, shot: S('Valeur de plan.', { enum: Object.keys(SHOTS) }), side: S('D’où la caméra regarde le sujet, par rapport à là où IL regarde : face = devant lui, dos = derrière lui, profil_droit = à sa droite…', { enum: Object.keys(SIDES) }),
-  height: S('Hauteur de la caméra : yeux, plongee (au-dessus, 30°), forte_plongee (55°), aerien (72°), contre_plongee (en dessous), sol (au ras du sol).', { enum: Object.keys(HEIGHTS) }), fov: N('Focale (°) ; par défaut celle conseillée pour ce plan.'),
-  thirds: S('Règle des tiers : où placer le sujet dans le cadre.', { enum: ['centre', 'gauche', 'droite'] }), distance: N('Distance au sujet en mètres (remplace celle calculée d’après la valeur de plan).') };
+const ENT = S('Entité : id, nom, ou "joueur".'), CAM = S('Nom de la caméra.'), TS = N('Instant (s).');
+const LOOKAT = { type: 'object', description: 'Cible : entité ou point.', properties: { entity: ENT, x: N('X'), y: N('Y'), z: N('Z') }, additionalProperties: false };
+const EASE = S('Interpolation vers la clé suivante.', { enum: ['fluide', 'doux', 'accel', 'frein', 'fixe'] });
+const KEYP = { t: TS, x: N('X (m)'), y: N('Y, hauteur (m)'), z: N('Z (m)'), yaw: N('°'), pitch: N('°, négatif = vers le bas'), roll: N('°'), fov: N('° (5–130)'),
+  vignette: N('0–100'), grain: N('0–100'), dof: N('0–100'), raytracing: N('0–100 (300 VIP)'), look_at: LOOKAT, ease: EASE };
+const IMG0 = { filter: S('Filtre.', { enum: ['', 'nuit', 'thermique', 'nb', 'sepia', 'cine'] }), shadow: B('Ombres portées.'), raytracing: N('0–100 (300 VIP).'), vignette: N('0–100'), grain: N('0–100'), dof: N('0–100') };
+const IMG = { ...IMG0, rt_ao: N('Occlusion, force 0–200 (100 = normal).'), rt_radius: N('Occlusion, rayon 0–200.'), rt_bloom: N('Halo 0–200.'), rt_reflets: N('Reflets 0–200.') };
+const SHOTP = { subject: ENT, shot: S('Valeur de plan.', { enum: Object.keys(SHOTS) }), side: S('Côté de la caméra par rapport au regard du sujet (face = devant lui).', { enum: Object.keys(SIDES) }),
+  height: S('yeux, plongee (30°), forte_plongee (55°), aerien (72°, dehors seulement), contre_plongee, sol (ras du sol).', { enum: Object.keys(HEIGHTS) }), fov: N('° ; défaut : celle du plan.'),
+  thirds: S('Règle des tiers.', { enum: ['centre', 'gauche', 'droite'] }), distance: N('Distance au sujet (m), à la place de celle du plan.') };
 const T = (name, description, parameters, mut = false) => ({ name, description, parameters, mut });
 export const TOOLS = [
-  T('scene_info', 'Le record : lieu, intérieur ou extérieur, durée, heure du jeu, jour ou nuit, le joueur enregistreur, nombre d’entités, instant courant de la frise.', P({})),
-  T('list_entities', 'Les entités du record avec leur position à un instant : id, type (joueur | pnj | vehicule | objet), nom, x/y/z (pieds), cap (°), présent, état, distance au joueur. Filtre par type, recherche par nom, ou autour d’un point / d’une entité.', P({ type: S('Type voulu.', { enum: ['joueur', 'pnj', 'vehicule', 'objet', 'personnages'] }), search: S('Texte cherché dans le nom.'), near: ENT, radius: N('Rayon en mètres autour de « near » (défaut 15).'), t: TS, limit: N('Nombre maximal (défaut 40).') })),
-  T('get_entity', 'Tout sur une entité à un instant : position, cap, vitesse, état (debout, assis, en marche, en course…), tenue détaillée et skins, objet en main, sac, véhicule occupé, présence dans le record (de… à…), entités et objets proches.', P({ entity: ENT, t: TS }, ['entity'])),
-  T('entity_path', 'La trajectoire d’une entité dans le temps : positions, cap et vitesse échantillonnés entre deux instants. Indispensable avant un plan de suivi.', P({ entity: ENT, from: N('Début (s), défaut 0.'), to: N('Fin (s), défaut la durée.'), step: N('Pas en secondes (défaut : 20 points sur l’intervalle).') }, ['entity'])),
-  T('list_events', 'Ce qui se passe dans le record : paroles (chat), gestes, émotes, tirs, coups, chutes — avec l’instant et l’entité. Pour caler les coupes.', P({ from: N('Début (s).'), to: N('Fin (s).'), entity: ENT })),
-  T('list_cameras', 'Les caméras du projet : nom, active, parent, options, filtre, image, début et fin de leurs clés, nombre de clés par paramètre.', P({})),
-  T('get_camera', 'Une caméra en détail : toutes ses clés par paramètre (instant, valeur, ease) et sa pose dans le monde à un instant.', P({ camera: CAM, t: TS }, ['camera'])),
-  T('cinematic_summary', 'Le montage actuel : la suite des plans (quelle caméra est à l’antenne, de quand à quand) et la durée totale.', P({})),
-  T('create_camera', 'Crée une caméra avec une première clé à l’instant t. Donne sa position (monde) et son orientation (yaw/pitch, ou look_at pour viser une entité ou un point). Pour un cadrage de cinéma sur un sujet, préfère frame_shot.', P({ name: S('Nom du plan (ex. « Plan large d’ouverture »).'), t: TS, x: N('X'), y: N('Y (hauteur)'), z: N('Z'), yaw: N('Lacet (°)'), pitch: N('Tangage (°)'), roll: N('Roulis (°)'), fov: N('Focale (°), défaut 50'), look_at: LOOKAT, ...IMG }, ['name', 't', 'x', 'y', 'z']), true),
-  T('update_camera', 'Change les réglages d’une caméra : nom, active (prise dans la cinématique), couleur, filtre, ombre, et les valeurs FIXES de raytracing / vignette / grain / dof (pour les animer : set_keys).', P({ camera: CAM, name: S('Nouveau nom.'), active: B('Prise en compte dans la cinématique.'), color: S('Couleur #rrggbb de sa piste.'), ...IMG }, ['camera']), true),
+  T('scene_info', 'Le record : lieu, intérieur ou extérieur, durée, heure, jour ou nuit, joueur, passage intéressant, nombre d’entités, instant courant.', P({})),
+  T('list_entities', 'Les entités à un instant : id, type (joueur | pnj | vehicule | objet), nom, x/y/z, cap, présence, distance au joueur. Filtres : type, nom, autour d’une entité.', P({ type: S('Type.', { enum: ['joueur', 'pnj', 'vehicule', 'objet', 'personnages'] }), search: S('Texte du nom.'), near: ENT, radius: N('Rayon (m), défaut 15.'), t: TS, limit: N('Défaut 40.') })),
+  T('get_entity', 'Une entité à un instant : position, cap, vitesse, état, tenue, objet en main, présence dans le record, voisins.', P({ entity: ENT, t: TS }, ['entity'])),
+  T('entity_path', 'Trajectoire d’une entité entre deux instants (positions, cap, vitesse). À lire avant un plan de suivi.', P({ entity: ENT, from: N('Début (s).'), to: N('Fin (s).'), step: N('Pas (s).') }, ['entity'])),
+  T('list_events', 'Événements du record (paroles, gestes, émotes, tirs, coups, chutes) avec leur instant : pour caler les coupes.', P({ from: N('Début (s).'), to: N('Fin (s).'), entity: ENT })),
+  T('list_cameras', 'Les caméras : nom, active, parent, filtre, début et fin, nombre de clés.', P({})),
+  T('get_camera', 'Une caméra : ses clés par paramètre et sa pose dans le monde à un instant.', P({ camera: CAM, t: TS }, ['camera'])),
+  T('cinematic_summary', 'Le montage RÉEL : suite des plans (caméra, début, fin, durée), durée totale, et « problemes » à corriger.', P({})),
+  T('create_camera', 'Crée une caméra avec une première clé à t : position (monde) et orientation (yaw/pitch, ou look_at). Pour cadrer un sujet, préfère frame_shot.', P({ name: S('Nom du plan.'), t: TS, x: N('X'), y: N('Y (hauteur)'), z: N('Z'), yaw: N('°'), pitch: N('°'), roll: N('°'), fov: N('°, défaut 50'), look_at: LOOKAT, ...IMG0 }, ['name', 't', 'x', 'y', 'z']), true),
+  T('update_camera', 'Réglages d’une caméra : nom, active, couleur, filtre, ombre, valeurs FIXES de raytracing / vignette / grain / dof (pour animer : set_keys).', P({ camera: CAM, name: S('Nouveau nom.'), active: B('Dans la cinématique.'), color: S('#rrggbb'), ...IMG }, ['camera']), true),
   T('delete_camera', 'Supprime une caméra (annulable par l’utilisateur).', P({ camera: CAM }, ['camera']), true),
-  T('duplicate_camera', 'Duplique une caméra avec toutes ses clés.', P({ camera: CAM, name: S('Nom de la copie.') }, ['camera']), true),
-  T('set_parent', 'Attache une caméra à un parent (personnage, véhicule ou caméra) ou la détache (parent: null). La caméra ne bouge pas au moment de l’attache (ses clés sont converties). follow : elle tourne avec lui ; look : elle le regarde toujours.', P({ camera: CAM, parent: { description: 'Entité ou nom de caméra ; null pour détacher.', anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] }, follow: B('Tourner avec le parent.'), look: B('Regarder le parent.') }, ['camera', 'parent']), true),
-  T('set_keys', 'Pose ou remplace des images-clés sur une caméra. Chaque clé ne donne QUE les paramètres à poser à cet instant (une clé de fov seule ne touche pas la position). look_at calcule yaw et pitch pour viser une entité ou un point depuis la position de la caméra à cet instant. space : "monde" (défaut) ou "parent" (coordonnées relatives au parent).', P({ camera: CAM, keys: { type: 'array', description: 'Les clés à poser.', items: P(KEYP, ['t']) }, space: S('Repère des x/y/z/yaw donnés.', { enum: ['monde', 'parent'] }) }, ['camera', 'keys']), true),
-  T('delete_keys', 'Supprime des clés : à un instant (t) ou sur un intervalle (from → to) ; params limite à certains paramètres (sinon tous).', P({ camera: CAM, t: TS, from: N('Début (s).'), to: N('Fin (s).'), params: { type: 'array', items: { type: 'string', enum: [...POSE, ...Object.keys(FX)] }, description: 'Paramètres visés.' } }, ['camera']), true),
-  T('set_ease', 'Change l’interpolation des clés d’un instant (vers la clé suivante).', P({ camera: CAM, t: TS, ease: KEYP.ease, params: { type: 'array', items: { type: 'string' }, description: 'Paramètres visés (défaut : tous).' } }, ['camera', 't', 'ease']), true),
-  T('move_keys', 'Décale dans le temps toutes les clés d’une caméra (ou celles d’un intervalle) : pour avancer, retarder ou resserrer un plan.', P({ camera: CAM, shift: N('Décalage en secondes (négatif = plus tôt).'), from: N('Début de l’intervalle (s).'), to: N('Fin de l’intervalle (s).') }, ['camera', 'shift']), true),
-  T('frame_shot', 'Cadre un sujet selon la grammaire du cinéma et pose la clé correspondante (position + orientation + focale) à l’instant t : valeur de plan, côté, hauteur, règle des tiers. La caméra est créée si « camera » n’existe pas. Appelle-le deux fois (début et fin) pour un plan fixe avec durée ou un travelling entre deux cadrages. Tient compte des murs.', P({ camera: S('Nom de la caméra (créée si elle n’existe pas).'), t: TS, ...SHOTP, ease: KEYP.ease }, ['camera', 't', 'subject', 'shot']), true),
-  T('orbit_shot', 'Travelling circulaire autour d’un sujet, de « from » à « to » : la caméra est attachée au sujet (elle le suit s’il bouge) et le regarde ; elle tourne de « degrees » autour de lui à partir du côté « side ».', P({ camera: S('Nom de la caméra (créée si elle n’existe pas).'), subject: ENT, from: N('Début (s).'), to: N('Fin (s).'), side: SHOTP.side, degrees: N('Angle parcouru (°), positif = vers la droite du sujet ; défaut 120.'), distance: N('Distance au sujet (m), défaut 4.'), height: N('Hauteur de la caméra au-dessus du sol du sujet (m), défaut 1,6.'), fov: N('Focale (°), défaut 45.'), ease: KEYP.ease }, ['camera', 'subject', 'from', 'to']), true),
-  T('seek', 'Place la tête de lecture de la frise à un instant.', P({ t: TS }, ['t'])),
-  T('set_playback', 'Lecture : en marche ou en pause, et vitesse (0,1 à 4 ; 1 = normale — elle vaut aussi pour la cinématique et l’export : 0,5 = ralenti).', P({ playing: B('Lecture en marche.'), rate: N('Vitesse.') }), true),
-  T('set_view', 'Ce que montre la vue : "libre" (caméra libre), "camera" (à travers une caméra), "joueur" (par les yeux du joueur).', P({ mode: S('Vue.', { enum: ['libre', 'camera', 'joueur'] }), camera: CAM }, ['mode'])),
-  T('appearance_options', 'Ce qu’on peut faire porter à un personnage : pour chaque attribut (gender, skin, hair, hairStyle, eyes, beard, chest, hat, glasses, top, bottom, feet et leurs couleurs acc, glassesCol, shirt, pants, shoes) la liste « numéro: nom » permise au compte, les skins de vêtements possédés qui vont sur sa tenue, les objets tenables et les sacs.', P({ entity: ENT, attribute: S('Un seul attribut à détailler (sinon tous, en abrégé).') }, ['entity'])),
-  T('set_appearance', 'Change l’apparence d’un personnage du record. look : { attribut: numéro } (voir appearance_options) ; skins : { hat | glasses | top | bottom | feet : "clé du skin" ou null } ; hold : objet en main ("glock17", "couteau__lave"… ou null) ; bag : "sac_a_dos", "sacoche", "sac_a_dos__pirate", "sacoche:3" (teinte) ou null. Ce que le compte ne possède pas est refusé.', P({ entity: ENT, look: { type: 'object', description: 'Attributs à changer : numéro, ou nom exact du modèle / de la couleur (list_skins).', additionalProperties: { anyOf: [{ type: 'number' }, { type: 'string' }] } }, skins: { type: 'object', description: 'Skins de vêtements.', additionalProperties: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, hold: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Objet tenu.' }, bag: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Sac.' } }, ['entity']), true),
-  T('list_skins', 'Ce qu’un personnage peut porter, par emplacement, avec les NOMS EXACTS, limité à ce que le compte possède (un administrateur a tout) : haut, bas, chaussures, chapeau, lunettes, coiffure, barbe, corps — pour chacun les modèles (« numéro: nom »), les couleurs, les skins (clé et nom) ; et les objets tenables, les sacs. À appeler avant set_appearance.', P({ entity: ENT, slot: S('Un seul emplacement : haut, bas, chaussures, chapeau, lunettes, coiffure, barbe, corps, en_main, sac.') })),
-  T('reset_appearance', 'Rend à un personnage son apparence d’origine (celle du record).', P({ entity: ENT }, ['entity']), true),
-  T('set_visibility', 'Masque ou montre une entité (personnage, véhicule, objet) dans la scène.', P({ entity: ENT, visible: B('Visible ou non.') }, ['entity', 'visible']), true),
-  T('preview_cinematic', 'Lance la prévisualisation de la cinématique dans la vue (les caméras actives s’enchaînent).', P({})),
-  T('export_video', 'Ouvre la page « Exporter » (l’utilisateur y choisit format, compression, nom, début et fin). Pour lancer un export réglé : export_cinematic. Seulement si l’utilisateur le demande.', P({})),
+  T('duplicate_camera', 'Duplique une caméra avec ses clés.', P({ camera: CAM, name: S('Nom de la copie.') }, ['camera']), true),
+  T('set_parent', 'Attache une caméra à un personnage, un véhicule ou une caméra (parent: null pour détacher) sans la bouger. follow : tourne avec lui ; look : le regarde.', P({ camera: CAM, parent: { description: 'Entité, caméra, ou null.', anyOf: [{ type: 'string' }, { type: 'number' }, { type: 'null' }] }, follow: B('Tourner avec.'), look: B('Regarder.') }, ['camera', 'parent']), true),
+  T('set_keys', 'Pose ou remplace des clés sur une caméra. Chaque clé ne donne QUE les paramètres à poser à cet instant. look_at calcule yaw et pitch vers une entité ou un point.', P({ camera: CAM, keys: { type: 'array', description: 'Clés.', items: P(KEYP, ['t']) }, space: S('Repère des x/y/z/yaw.', { enum: ['monde', 'parent'] }) }, ['camera', 'keys']), true),
+  T('delete_keys', 'Supprime des clés à un instant (t) ou sur un intervalle (from → to), pour certains paramètres ou tous.', P({ camera: CAM, t: TS, from: N('Début (s).'), to: N('Fin (s).'), params: { type: 'array', items: { type: 'string', enum: [...POSE, ...Object.keys(FX)] }, description: 'Paramètres.' } }, ['camera']), true),
+  T('set_ease', 'Change l’interpolation des clés d’un instant.', P({ camera: CAM, t: TS, ease: EASE, params: { type: 'array', items: { type: 'string' }, description: 'Paramètres (défaut : tous).' } }, ['camera', 't', 'ease']), true),
+  T('move_keys', 'Décale dans le temps les clés d’une caméra (toutes, ou celles d’un intervalle).', P({ camera: CAM, shift: N('Décalage (s), négatif = plus tôt.'), from: N('Début (s).'), to: N('Fin (s).') }, ['camera', 'shift']), true),
+  T('frame_shot', 'Cadre un sujet selon la grammaire du cinéma et pose la clé (position, orientation, focale) à t. Crée la caméra si besoin. Deux appels (début et fin) = un plan avec durée, ou un travelling entre deux cadrages.', P({ camera: S('Nom de la caméra.'), t: TS, ...SHOTP, ease: EASE }, ['camera', 't', 'subject', 'shot']), true),
+  T('orbit_shot', 'Travelling circulaire autour d’un sujet de from à to : caméra attachée au sujet, qui le regarde et tourne de « degrees » depuis le côté « side ».', P({ camera: S('Nom de la caméra.'), subject: ENT, from: N('Début (s).'), to: N('Fin (s).'), side: SHOTP.side, degrees: N('Angle (°), défaut 120.'), distance: N('m, défaut 4.'), height: N('Hauteur au-dessus du sol (m), défaut 1,6.'), fov: N('°, défaut 45.'), ease: EASE }, ['camera', 'subject', 'from', 'to']), true),
+  T('seek', 'Place la tête de lecture.', P({ t: TS }, ['t'])),
+  T('set_playback', 'Lecture en marche ou en pause, et vitesse (0,1 à 4 ; vaut aussi pour la cinématique et l’export).', P({ playing: B('En marche.'), rate: N('Vitesse.') }), true),
+  T('set_view', 'Vue affichée : libre, à travers une caméra, ou par les yeux du joueur.', P({ mode: S('Vue.', { enum: ['libre', 'camera', 'joueur'] }), camera: CAM }, ['mode'])),
+  T('appearance_options', 'Tout ce qu’un personnage peut porter (attributs et numéros, skins, objets, sacs), en abrégé ; un attribut pour son détail. Plus simple : list_skins.', P({ entity: ENT, attribute: S('Attribut à détailler.') }, ['entity'])),
+  T('set_appearance', 'Change l’apparence d’un personnage. look : { attribut ou emplacement : numéro ou nom } ; skins : { top | bottom | feet | hat | glasses : clé ou nom du skin, ou null } ; hold : objet en main ou null ; bag : sac ou null. Noms exacts : list_skins. Ce que le compte ne possède pas est refusé.', P({ entity: ENT, look: { type: 'object', description: 'Attributs.', additionalProperties: { anyOf: [{ type: 'number' }, { type: 'string' }] } }, skins: { type: 'object', description: 'Skins.', additionalProperties: { anyOf: [{ type: 'string' }, { type: 'null' }] } }, hold: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Objet tenu.' }, bag: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Sac.' } }, ['entity']), true),
+  T('list_skins', 'Ce qu’un personnage peut porter, par emplacement (haut, bas, chaussures, chapeau, lunettes, coiffure, barbe, corps, en_main, sac), avec les NOMS EXACTS, limité au compte : modèles, couleurs, skins. À appeler avant set_appearance.', P({ entity: ENT, slot: S('Un seul emplacement.') })),
+  T('reset_appearance', 'Rend à un personnage son apparence du record.', P({ entity: ENT }, ['entity']), true),
+  T('set_visibility', 'Masque ou montre une entité.', P({ entity: ENT, visible: B('Visible.') }, ['entity', 'visible']), true),
+  T('preview_cinematic', 'Lance la prévisualisation de la cinématique.', P({})),
+  T('export_video', 'Ouvre la page « Exporter » (l’utilisateur choisit format et réglages). Seulement sur demande.', P({})),
 ];
 // Familles d'outils « à la demande » : hors de ces familles (caméras, scène, géométrie, lecture), un outil part toujours au modèle. Une
 // famille s'ouvre quand la demande de l'utilisateur en parle (when, sur le texte sans accents), quand un de ses outils a déjà servi,
 // ou quand le modèle la demande (list_tool_groups). Un outil d'extension choisit sa famille par son champ « group », sinon par GROUP_OF.
 export const TOOL_GROUPS = {
-  animation: { label: 'ajouter et animer des objets, des PNJ, des faux joueurs ; poses, émotes, chutes, particules', when: /objet|modele|caisse|carton|tomb|chute|renvers|pnj|personnage|passant|figurant|faux joueur|ajout|rajout|pose|coucou|salu|danse|emote|geste|particule|fumee|etincelle|porte|voiture|deplac|bouge|anime|element|apparai|lance|jette/ },
+  animation: { label: 'ajouter et animer des objets, des PNJ, des faux joueurs ; poses, émotes, chutes, particules', when: /objet|modele|caisse|carton|tomb|chute|renvers|pnj|personnage|passant|figurant|faux joueur|ajout|rajout|pose|coucou|salu|danse|emote|geste|particule|fumee|etincelle|porte|voiture|deplac|bouge|apparai|lance|jette/ },
   lumieres: { label: 'lumières ajoutées, éclairage du lieu, miroirs', when: /lumi|lampe|eclair|spot|sombre|obscur|noir|etein|allum|nuit|ambiance|horreur|peur|angoiss|miroir|neon|projecteur|penombre/ },
   titres: { label: 'titres et textes, fondus, tremblement de caméra, capture d’image', when: /titre|texte|sous titre|generique|fondu|trembl|secou|capture|photo|image fixe|affiche le/ },
   monde: { label: 'heure du jour, météo, ciel, brouillard', when: /heure|nuit|jour|matin|soir|midi|minuit|meteo|pluie|pleut|brouillard|brume|ciel|coucher|aube|crepuscule|orage|ambiance|horreur/ },
@@ -157,7 +141,8 @@ export function createEngine(H) {
   const C = H.C, ok = (text, data = {}) => ({ ok: true, text: `✓ ${text}`, data }), ko = text => ({ ok: false, text: `✗ ${text}`, data: {} });
   const ms = (v, def = null) => { const n = num(v); return n === null ? def : Math.round(clamp(n, 0, H.dur / 1000) * 1000); };
   // (une entité par son id exact — nombre ou texte, objets du décor compris : « p164 » —, sa clé « i:p164 », « #12 », « id 12 », son nom)
-  const ent = q => { if (q == null || q === '') return null; const L = H.entities(), s = String(q).trim(), bare = s.replace(/^(?:id|pnj|npc|objet|entite|entité|joueur|#)\s*[:#n°]*\s*(?=\S)/i, '');
+  const ent = q => { if (q == null || q === '') return null; const L = H.entities(), inId = /\(\s*(?:id\s*:?\s*)?([A-Za-z]{0,2}\d+)\s*\)\s*$/.exec(String(q)), byId = (inId && L.find(e => String(e.id) === inId[1])) || (/^[uvi]:\S+$/.test(String(q).trim()) && !L.some(e => e.key === String(q).trim()) ? L.find(e => String(e.id) === String(q).trim().slice(2)) : null); if (byId) return byId; const s = String(q).replace(/\s*\((?:id|x)\b[^)]*\)\s*$/i, '').trim(); q = s;
+    const bare = s.replace(/^(?:id|pnj|npc|objet|entite|entité|joueur|#)\s*[:#n°]*\s*(?=\S)/i, '');
     return H.find(q) || L.find(e => e.key === s) || L.find(e => String(e.id) === s) || (bare !== s && /^[a-z]{0,2}\d+$/i.test(bare) ? L.find(e => String(e.id) === bare && e.kind !== 'objet') || L.find(e => String(e.id) === bare) : null) || L.find(e => e.kind === 'objet' && nrm(e.name) === nrm(s)) || null; };
   const camOf = q => { const s = nrm(q); return s ? H.cams.find(c => c.id === q) || H.cams.find(c => nrm(c.name) === s) || H.cams.find(c => nrm(c.name).replace(/ /g, '') === s.replace(/ /g, '')) || H.cams.find(c => nrm(c.name).includes(s) || s.includes(nrm(c.name))) || null : null; };
   const noCam = (q, tool) => ({ ...ko(`Caméra « ${q ?? ''} » introuvable${H.cams.length ? ` (caméras existantes : ${H.cams.map(c => `« ${c.name} »`).join(', ')})` : ' (aucune caméra n’existe encore)'} : crée-la d’abord avec frame_shot, create_camera ou orbit_shot, puis rappelle ${tool}.`), retry: true });
@@ -201,7 +186,7 @@ export function createEngine(H) {
     return { pose: { x: q.x, y: q.y, z: q.z, yaw, pitch: A.pitch, roll: 0, fov }, wall, d, name: S0[3] };
   }
   const RUN = {
-    scene_info() { const I = H.info(); return ok(`Record : ${I.lieu}, ${r1(H.dur / 1000)} s.`, { ...I, duree_s: r2(H.dur / 1000), instant_courant_s: r2(H.T / 1000), entites: H.entities().reduce((o, e) => { o[e.kind] = (o[e.kind] || 0) + 1; return o; }, {}), cameras: H.cams.length }); },
+    scene_info() { const I = H.info(); return ok(`Record : ${I.lieu}, ${r1(H.dur / 1000)} s.`, { ...I, duree_s: r2(H.dur / 1000), instant_courant_s: r2(H.T / 1000), passage_interessant: interest(H), entites: H.entities().reduce((o, e) => { o[e.kind] = (o[e.kind] || 0) + 1; return o; }, {}), cameras: H.cams.length }); },
     list_entities(a) {
       const t = ms(a.t, Math.round(H.T)), n = clamp(num(a.limit) ?? 40, 1, 120), me = H.entities().find(e => e.me), pm = me && pos(me, t), q = String(a.search || '').toLowerCase();
       const c = a.near != null ? (() => { const e = ent(a.near); return e && pos(e, t); })() : null; if (a.near != null && !c) return ko(`« ${a.near} » : entité introuvable.`);
@@ -251,11 +236,14 @@ export function createEngine(H) {
       for (let i = 0; i + 1 < ts.length; i++) { const c = C.activeCam(H.cams, (ts[i] + ts[i + 1]) / 2); if (!c) continue; const l = plans[plans.length - 1]; if (l && l.camera === c.name) l.fin = r2(ts[i + 1] / 1000); else plans.push({ camera: c.name, debut: r2(ts[i] / 1000), fin: r2(ts[i + 1] / 1000) }); }
       for (const p of plans) p.duree = r2(p.fin - p.debut);
       const pb = problems(plans, R, old instanceof Set ? old : null), dur = H.dur / 1000, rest = [];   // (non couvert : une remarque, pas un défaut — on peut ne vouloir qu'un passage)
-      if (R[0] / 1000 > 2) rest.push(`le début du record (0 → ${r2(R[0] / 1000)} s) n’a pas de plan`); if (dur - R[1] / 1000 > 2) rest.push(`la fin du record (${r2(R[1] / 1000)} → ${r2(dur)} s) n’a pas de plan : pour tout couvrir, ajoute un plan final ou prolonge le dernier`);
+      if (R[0] / 1000 > 2) rest.push(`le début du record (0 → ${r2(R[0] / 1000)} s) n’a pas de plan`); if (dur - R[1] / 1000 > 2) rest.push(`la fin du record (${r2(R[1] / 1000)} → ${r2(dur)} s) n’a pas de plan — c’est normal si rien d’intéressant ne s’y passe ; n’étire aucun plan pour la couvrir (au besoin, de NOUVEAUX plans courts)`);
       return ok(`Cinématique : ${plans.length} plan${plans.length > 1 ? 's' : ''}, ${r1((R[1] - R[0]) / 1000)} s${pb.length ? ` — ${pb.length} problème${pb.length > 1 ? 's' : ''} à corriger` : ''}.`, { debut: r2(R[0] / 1000), fin: r2(R[1] / 1000), duree: r2((R[1] - R[0]) / 1000), nombre_de_plans: plans.length, plans, problemes: pb, ...(rest.length ? { non_couvert: rest } : {}), ...(pb.length ? {} : { verdict: 'montage correct : résume-le tel quel (mêmes plans, mêmes durées)' }) });
     },
     create_camera(a) {
-      const t = ms(a.t, Math.round(H.T)), x = num(a.x), y = num(a.y), z = num(a.z); if (x === null || y === null || z === null) return ko('create_camera : x, y et z sont obligatoires.');
+      const t = ms(a.t, Math.round(H.T)), x = num(a.x), y = num(a.y), z = num(a.z);
+      // (appelé avec un sujet au lieu d'une position — les paramètres de frame_shot ou d'orbit_shot : c'est cet outil-là qui est exécuté)
+      if ((x === null || y === null || z === null) && a.subject != null && a.name) return a.degrees != null || (a.from != null && a.to != null && !a.shot) ? RUN.orbit_shot({ ...a, camera: a.name }) : RUN.frame_shot({ ...a, camera: a.name });
+      if (x === null || y === null || z === null) return ko('create_camera : x, y et z sont obligatoires (pour cadrer un sujet sans coordonnées : frame_shot ou orbit_shot).');
       const pose = { x, y, z, yaw: (num(a.yaw) ?? 0) * D2R, pitch: clamp((num(a.pitch) ?? 0) * D2R, -1.55, 1.55), roll: (num(a.roll) ?? 0) * D2R, fov: clamp(num(a.fov) ?? 50, 5, 130) };
       const tg = target(a.look_at, t); if (a.look_at && !tg) return ko('create_camera : look_at introuvable.'); if (tg) Object.assign(pose, aim(pose, tg));
       const c = C.newCam(H.cams, pose, t); if (a.name) c.name = String(a.name).slice(0, 40); H.cams.push(c); applyImage(c, a);
@@ -342,7 +330,7 @@ export function createEngine(H) {
       return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}${R.name} sur ${e.name} à ${fmtT(t)} (${a.side}, ${a.height}, à ${r1(R.d)} m, focale ${Math.round(R.pose.fov)}°)${R.wall ? ' — rapprochée : un mur gênait' : ''}${dflt.length ? ` — par défaut : ${dflt.join(' ; ')}` : ''}.`, { camera: c.name, creee: made, sujet: e.name, plan: shot, ...(dflt.length ? { valeurs_par_defaut: dflt } : {}), pose_monde: { x: r2(R.pose.x), y: r2(R.pose.y), z: r2(R.pose.z), yaw: r1(R.pose.yaw * R2D), pitch: r1(R.pose.pitch * R2D), fov: r1(R.pose.fov) }, distance: r1(R.d), ...(R.wall ? { mur: true } : {}) });
     },
     orbit_shot(a) {
-      const e = a.subject == null || a.subject === '' ? H.entities().find(x => x.me) : ent(a.subject); if (!e || e.kind === 'objet') return ko(`orbit_shot : sujet « ${a.subject} » introuvable (donne « subject » : un personnage ou un véhicule, ou "joueur").`);
+      const e = a.subject == null || a.subject === '' ? H.entities().find(x => x.me) : ent(a.subject); if (!e) return ko(`orbit_shot : sujet « ${a.subject} » introuvable (donne « subject » : un id ou un nom de list_entities, ou "joueur").`);
       if (!a.camera) return ko('orbit_shot : il manque « camera » (le nom du plan).');
       const t0 = ms(a.from, Math.round(H.T)); let t1 = ms(a.to, Math.min(Math.round(H.dur), t0 + 4000)); if (t1 - t0 < MIN_SHOT * 1000) t1 = Math.min(Math.round(H.dur), t0 + 3000); if (t1 - t0 < 300) return ko('orbit_shot : « to » doit être après « from » (en secondes).');
       a = { ...a, side: pickKey(SIDES, a.side, SIDE_SYN) || 'face' };
@@ -351,6 +339,12 @@ export function createEngine(H) {
       const a0 = p0.yaw + (SIDES[a.side] ?? 0) * D2R, n = Math.max(2, Math.ceil(Math.abs(deg) / 30)), ease = C.EASES[a.ease] ? a.ease : 'fluide';
       let c = camOf(a.camera); const made = !c; if (!c) { c = C.newCam(H.cams); c.name = String(a.camera || c.name).slice(0, 40); H.cams.push(c); }
       for (const ch of ['x', 'y', 'z', 'yaw', 'pitch']) c.tracks[ch] = c.tracks[ch].filter(k => k.t < t0 || k.t > t1);
+      if (e.kind === 'objet') {   // (un objet du décor ne bouge pas : pas de parent — des clés dans le monde, tournées vers lui)
+        const tg = { x: p0.x, y: p0.y + Math.max(0.4, (H.geo?.topOf?.(p0.x, p0.z) ?? 0.8) * 0.62), z: p0.z }, hw = p0.y + (num(a.height) ?? 1.6); c.parent = null; c.follow = false; c.look = false;
+        for (let i = 0; i <= n; i++) { const t = Math.round(t0 + (t1 - t0) * i / n), an = a0 + deg * D2R * i / n, q = { x: tg.x + Math.cos(an) * d, y: hw, z: tg.z + Math.sin(an) * d }; writePose(c, t, { ...q, ...aim(q, tg), roll: 0 }, false, ease); }
+        for (const t of [t0, t1]) C.setKey(c, 'fov', t, fov);
+        return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}travelling circulaire de ${Math.round(deg)}° autour de ${e.name}, de ${fmtT(t0)} à ${fmtT(t1)} (à ${r1(d)} m, elle le regarde).`, { camera: c.name, creee: made, cles: n + 1 });
+      }
       c.parent = { kind: e.kind === 'vehicule' ? 'vehicule' : 'perso', id: e.id, name: e.name }; c.follow = false; c.look = true;
       for (let i = 0; i <= n; i++) { const t = Math.round(t0 + (t1 - t0) * i / n), an = a0 + deg * D2R * i / n; C.setKey(c, 'x', t, Math.cos(an) * d, ease); C.setKey(c, 'y', t, hy, ease); C.setKey(c, 'z', t, Math.sin(an) * d, ease); }
       for (const t of [t0, t1]) { C.setKey(c, 'fov', t, fov); for (const ch of ['yaw', 'pitch', 'roll']) if (!c.tracks[ch].length) C.setKey(c, ch, t, 0); }
@@ -400,6 +394,8 @@ export function createEngine(H) {
   /** Ce qui cloche dans un montage (plans trop courts, caméras jamais à l'antenne, début ou fin non couverts) : des phrases pour l'assistant */
   function problems(plans, R, old = null) {
     const out = [], dur = H.dur / 1000;
+    // (plan étiré : au-delà de 12 s — 25 s pour un travelling motivé : vue subjective, chemin, caméra attachée —, un plan lasse ; les caméras de l'utilisateur ne sont pas jugées)
+    for (const p of plans) { const c = H.cams.find(x => x.name === p.camera), lim = c && (c.pov || c.path || c.parent) ? 25 : 12; if (c && !old?.has(c.id) && p.duree > lim) out.push(`plan « ${p.camera} » trop long (${p.duree} s) : un plan ne s’étire pas pour couvrir le record — ramène sa fin à ${r2(p.debut + Math.min(lim, 6))} s environ (delete_keys puis set_keys / frame_shot sur sa dernière clé) ou découpe-le en plans de valeurs et d’axes différents ; le montage peut s’arrêter avant la fin du record`); }
     for (const p of plans) if (p.duree < MIN_SHOT) out.push(`plan « ${p.camera} » trop court (${p.duree} s, de ${p.debut} à ${p.fin} s) : allonge-le à ${MIN_SHOT} s au moins (move_keys / set_keys) ou supprime sa caméra (delete_camera)`);
     const air = new Set(plans.map(p => p.camera));
     for (const x of EXT) { try { out.push(...(x.run.problems?.(old) || [])); } catch (e) { console.warn('extension : problèmes', e); } }
@@ -420,20 +416,25 @@ export function createEngine(H) {
   const ALL = [...TOOLS, ...EXT.flatMap(x => x.def.tools || [])], byName = new Map(ALL.map(t => [t.name, t]));
   // Familles d'outils (cf. TOOL_GROUPS) : seules les familles utiles à la demande partent au modèle — moins de jetons, moins de
   // confusion. « active » : les familles ouvertes dans cette conversation (demande, outil déjà appelé, list_tool_groups).
+  let lastUser = '';   // (la dernière demande de l'utilisateur, sans accents : pour juger si une famille d'outils est vraiment demandée)
+  const camsOnly = () => /animation|cinematique|decouverte|presentation|film|video|trailer|montage|visite/.test(lastUser) && !TOOL_GROUPS.animation.when.test(lastUser);
   const active = new Set(), groupOf = name => byName.get(name)?.group || GROUP_OF[name] || null;
   RUN.list_tool_groups = a => {
     const want = (Array.isArray(a.enable) ? a.enable : a.enable ? [a.enable] : []).map(g => nrm(g).replace(/ /g, '_')).filter(g => g.length >= 3), opened = [];
-    for (const g of Object.keys(TOOL_GROUPS)) if (want.some(w => w === g || w === 'tout' || w === 'toutes' || g.startsWith(w) || w.startsWith(g))) { active.add(g); opened.push(g); }
+    // (« animation de découverte », « cinématique », « film »… : un montage de caméras — la famille « animation » ne s'ouvre pas si l'utilisateur n'a rien demandé à ajouter ni à faire bouger : le modèle recopiait les mascottes du lieu au lieu de les filmer)
+    const refused = [];
+    for (const g of Object.keys(TOOL_GROUPS)) if (want.some(w => w === g || w === 'tout' || w === 'toutes' || g.startsWith(w) || w.startsWith(g))) { if (g === 'animation' && camsOnly() && !active.has(g)) { refused.push(g); continue; } active.add(g); opened.push(g); }
+    if (refused.length && !opened.length) return ko('Famille « animation » non ouverte : l’utilisateur demande une cinématique (un montage de CAMÉRAS), pas d’ajouter ni de faire bouger des objets. Tout ce que describe_place nomme existe déjà dans la scène : filme-le (path_shot, frame_shot avec son id, orbit_shot, pov_shot).');
     return ok(opened.length ? `Familles d’outils ouvertes : ${opened.join(', ')} — leurs outils sont disponibles dès maintenant.` : 'Familles d’outils à la demande (enable: ["nom"] pour en ouvrir).', { familles: Object.entries(TOOL_GROUPS).map(([id, g]) => ({ id, pour: g.label, ouverte: active.has(id), outils: ALL.filter(t => groupOf(t.name) === id).map(t => t.name) })).filter(g => g.outils.length) });
   };
-  const META = T('list_tool_groups', 'Les familles d’outils à la demande (animation d’objets et de PNJ, lumières, titres et effets, monde et météo, export, apparence) : liste, et ouverture avec enable. À appeler dès que la demande sort des caméras et qu’un outil nécessaire n’est pas dans ta liste.', P({ enable: { type: 'array', items: { type: 'string' }, description: 'Familles à ouvrir (ex. ["animation", "lumieres"]) ; "tout" pour toutes.' } }));
+  const META = T('list_tool_groups', 'Les familles d’outils à la demande (animation d’objets et de PNJ, lumières, titres et effets, monde et météo, export, apparence) : liste, et ouverture avec enable. Seulement si l’utilisateur demande explicitement autre chose que des caméras (ajouter ou faire bouger un objet ou un personnage, lumières, titres, météo, export, tenue) et que l’outil nécessaire n’est pas dans ta liste.', P({ enable: { type: 'array', items: { type: 'string' }, description: 'Familles à ouvrir (ex. ["animation", "lumieres"]) ; "tout" pour toutes.' } }));
   byName.set(META.name, META);
   return {
     tools: toolSchemas(ALL), ext: EXT.map(x => x.run), active,
     /** Ouvre les familles que la conversation réclame : mots de la demande, outils déjà appelés, familles déjà ouvertes */
     open(history) {
       for (const m of history) {
-        if (m.role === 'user' && typeof m.content === 'string' && !m.content.startsWith('[')) { const s = nrm(m.content.split('\n\n[État du Studio]')[0]); for (const [g, G] of Object.entries(TOOL_GROUPS)) if (G.when.test(s)) active.add(g); }
+        if (m.role === 'user' && typeof m.content === 'string' && !m.content.startsWith('[')) { const s = nrm(m.content.split('\n\n[État du Studio]')[0]); lastUser = s; for (const [g, G] of Object.entries(TOOL_GROUPS)) if (G.when.test(s)) active.add(g); }
         for (const c of m.tool_calls || []) { const g = groupOf(c.function?.name); if (g) active.add(g); if (c.function?.name === 'list_tool_groups') { try { RUN.list_tool_groups(JSON.parse(c.function.arguments || '{}')); } catch { /* arguments illisibles */ } } }
       }
     },
@@ -453,6 +454,7 @@ export function createEngine(H) {
       try { a = a && typeof a === 'object' ? a : {};
         // (« entity », « element » et « character » désignent la même chose : le modèle les confond d'un outil à l'autre — tous acceptés partout)
         { const who = a.entity ?? a.element ?? a.character; if (who != null && who !== '') { a = { ...a }; a.entity ??= who; a.element ??= who; a.character ??= who; } }
+        if (groupOf(name) === 'animation' && !active.has('animation') && camsOnly()) return ko(`${name} : non exécuté — l’utilisateur demande une cinématique (un montage de CAMÉRAS), pas d’ajouter ni d’animer des objets ou des personnages. Ce que describe_place nomme existe déjà : filme-le (path_shot, frame_shot avec son id, orbit_shot, pov_shot).`);
         if (groupOf(name)) active.add(groupOf(name)); let r = fn(a); if (r.ok) for (const x of EXT) if (x.run.after) { try { r = x.run.after(name, a, r) || r; } catch (e) { console.warn('extension : après', name, e); } } if (r.ok && byName.get(name)?.mut) H.changed(); return r; } catch (e) { return ko(`${name} : erreur (${String(e?.message || e).slice(0, 160)}).`); }
     },
     /**
@@ -472,9 +474,23 @@ export function createEngine(H) {
 
 // ---------------------------------------------------------------- Un tour de conversation
 /** L'état du Studio joint à chaque message de l'utilisateur : de quoi agir sans poser de question */
+/**
+ * Le passage intéressant d'un record : là où le joueur se déplace, parle, agit (au plus 40 s : la fenêtre la plus dense). Rend
+ * { debut, fin, duree, deplacement_joueur, evenements, note } en secondes, ou null (rien ne se passe : tout le record se vaut).
+ */
+export function interest(H) {
+  const me = H.entities().find(e => e.me), dur = Math.round(H.dur), moves = []; let ev = [];
+  if (me) { let last = null; for (let t = 0; t <= dur; t += 500) { const p = H.posAt(me.key, t); if (p && last && Math.hypot(p.x - last.x, p.z - last.z) > 0.15) moves.push(t); if (p) last = p; } }
+  try { ev = H.events(0, dur).map(e => e.t).filter(Number.isFinite); } catch { ev = []; }
+  const all = [...moves, ...ev].sort((a, b) => a - b); if (!all.length) return null;
+  const a = Math.max(0, all[0] - 1000), b = Math.min(dur, all[all.length - 1] + 2000), MAX = 40000; let from = a, to = b;
+  if (b - a > MAX) { const cnt = s => all.filter(x => x >= s && x <= s + MAX - 1000).length, best = Math.max(...all.map(cnt)), first = all.find(s => cnt(s) >= best * 0.6); from = Math.max(0, first - 1000); to = Math.min(dur, from + MAX); }   // (la première fenêtre presque aussi dense que la meilleure : on commence au début de l'action)
+  return { debut: r1(from / 1000), fin: r1(to / 1000), duree: r1((to - from) / 1000), deplacement_joueur: moves.length ? `de ${r1(moves[0] / 1000)} à ${r1(moves[moves.length - 1] / 1000)} s` : 'immobile', evenements: ev.length,
+    ...(b - a > MAX ? { note: `il se passe des choses de ${r1(a / 1000)} à ${r1(b / 1000)} s : voici les 40 s les plus denses (« fais la suite » pour continuer)` } : {}) };
+}
 export function digest(H) {
-  const eng = createEngine({ ...H, changed() {} }), I = H.info(), L = eng.exec('list_entities', { limit: 30 }).data, C0 = eng.exec('list_cameras', {}).data;
-  return JSON.stringify({ lieu: I.lieu, interieur: I.interieur, duree_s: r2(H.dur / 1000), heure_du_jeu: I.heure, nuit: I.nuit, instant_courant_s: r2(H.T / 1000), joueur: I.joueur, format_image: r2(H.aspect()), entites_proches: L.entites, autres_entites: Math.max(0, L.total - L.entites.length), cameras: C0.cameras, compte: I.compte, ...Object.assign({}, ...eng.ext.map(x => { try { const d = x.digest?.(); return d ? { fiche_du_lieu: d } : {}; } catch { return {}; } })) });
+  const eng = createEngine({ ...H, changed() {} }), I = H.info(), L = eng.exec('list_entities', { limit: 16 }).data, C0 = eng.exec('list_cameras', {}).data;
+  return JSON.stringify({ lieu: I.lieu, interieur: I.interieur, duree_s: r2(H.dur / 1000), passage_interessant: interest(H), heure_du_jeu: I.heure, nuit: I.nuit, instant_courant_s: r2(H.T / 1000), joueur: I.joueur, format_image: r2(H.aspect()), entites_proches: L.entites, autres_entites: Math.max(0, L.total - L.entites.length), cameras: C0.cameras, compte: I.compte, ...Object.assign({}, ...eng.ext.map(x => { try { const d = x.digest?.(); return d ? { fiche_du_lieu: d } : {}; } catch { return {}; } })) });
 }
 /** Actions écrites dans le texte (modèle sans appel d'outils natif) : [{ name, args }] ou null */
 export function parseTextActions(text) {
@@ -497,13 +513,20 @@ export function parseTextActions(text) {
  */
 export function refusedText(actions) {
   const left = actions.filter((a, i) => !a.ok && !actions.slice(i + 1).some(b => b.ok && b.name === a.name)), seen = new Set(), L = [];
-  for (const a of left) { const t = `${a.name} — ${String(a.text).replace(/^✗\s*/, '').slice(0, 220)}`; if (!seen.has(t)) { seen.add(t); L.push(t); } }
-  return L.length ? `\n\n⚠ ${L.length > 1 ? `${L.length} actions ont été refusées par le Studio et n’ont PAS été faites` : 'Une action a été refusée par le Studio et n’a PAS été faite'} :\n${L.slice(0, 6).map(t => `• ${t}`).join('\n')}${L.length > 6 ? `\n• … et ${L.length - 6} autre${L.length > 7 ? 's' : ''}` : ''}` : '';
+  // (même raison pour plusieurs outils : une seule ligne)
+  const by = new Map(); for (const a of left) { const why = String(a.text).replace(/^✗\s*/, '').replace(new RegExp(`^${a.name} : `), '').slice(0, 220), S0 = by.get(why) || new Set(); S0.add(a.name); by.set(why, S0); }
+  for (const [why, names] of by) { const t = `${[...names].join(', ')} — ${why}`; if (!seen.has(t)) { seen.add(t); L.push(t); } }
+  return L.length ? `\n\n⚠ ${left.length > 1 ? `${left.length} actions ont été refusées par le Studio et n’ont PAS été faites` : 'Une action a été refusée par le Studio et n’a PAS été faite'} :\n${L.slice(0, 6).map(t => `• ${t}`).join('\n')}${L.length > 6 ? `\n• … et ${L.length - 6} autre${L.length > 7 ? 's' : ''}` : ''}` : '';
 }
 export async function runTurn(H, history, userText, ask, on = () => {}, maxRounds = 14, wait = ms => new Promise(r => setTimeout(r, ms))) {
   const eng = createEngine(H), actions = [], old = new Set(H.cams.map(c => c.id)); let changed = false, text = '', error = null, checked = 0;
   history.push({ role: 'user', content: `${userText}\n\n[État du Studio] ${digest(H)}` });
   eng.open(history);
+  // (durée demandée par l'utilisateur — « 20 s », « 30 secondes », « 1 min » — : contrôlée avant d'accepter la conclusion)
+  const wd = /(?<![\d.,])(\d{1,3})\s*(s|sec|secondes?|min|minutes?)(?![a-zà-ÿ])/i.exec(String(userText)), want = wd ? +wd[1] * (/^m/i.test(wd[2]) ? 60 : 1) : 0;
+  // (jetons : les résultats d'outils et les états du Studio des échanges anciens sont abrégés — seuls les deux derniers échanges restent entiers)
+  const lean = L => { let seen = 0; const cut = new Set(); for (let i = L.length - 1; i >= 0; i--) { if (L[i].role === 'assistant' && L[i].tool_calls) seen++; else if (seen >= 2 && ((L[i].role === 'tool' && L[i].content.length > 700) || (L[i].role === 'user' && i < L.length - 1 && /\n\n\[État du Studio\] /.test(L[i].content)))) cut.add(i); }
+    return cut.size ? L.map((m, i) => (!cut.has(i) ? m : m.role === 'tool' ? { ...m, content: `${m.content.slice(0, 600)}… (résultat abrégé : rappelle l’outil pour le détail)` } : { ...m, content: m.content.split('\n\n[État du Studio] ')[0] })) : L; };
   const run = calls => { const R = eng.batch(calls); R.forEach(r => { if (r.ok && eng.isMutating(r.name)) changed = true; const a = { ok: r.ok, text: r.text, name: r.name }; actions.push(a); on({ type: 'action', ...a }); }); return R; };
   for (let round = 0; round < maxRounds; round++) {
     // (contexte borné : le prompt, puis les échanges les plus récents — un échange d'outils n'est jamais coupé en deux)
@@ -511,7 +534,7 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
     // (site occupé — 429, « Doucement », « Trop de requêtes » — : on attend et on réessaie, jusqu'à trois fois)
     let res;
     for (let tries = 0; ; tries++) {
-      try { res = await ask({ messages: [{ role: 'system', content: eng.promptNow() }, ...history.slice(from)], tools: eng.toolsNow() }); } catch (e) { res = { error: String(e?.message || e) }; }
+      try { res = await ask({ messages: [{ role: 'system', content: eng.promptNow() }, ...lean(history.slice(from))], tools: eng.toolsNow() }); } catch (e) { res = { error: String(e?.message || e) }; }
       const busy = res && !res.message && (res.status === 429 || /doucement|trop de requ|rate.?limit|déjà en cours/i.test(String(res.error || '')));
       if (!busy || tries >= 3) break;
       on({ type: 'wait', text: `Le site est occupé : nouvel essai dans ${[1.5, 3, 6][tries]} s…` }); await wait([1500, 3000, 6000][tries]);
@@ -536,6 +559,14 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
     text = String(m.content || '').trim() || (actions.length ? 'C’est fait.' : '…');
     // (avant d'accepter la conclusion : le montage réel est contrôlé ; s'il a des défauts, l'assistant doit les corriger — deux fois au plus)
     const rc = changed ? eng.recap(old) : null;
+    // (une cinématique était demandée et aucune caméra n'a de plan : le tour n'est pas fini)
+    if (!H.C.cineRange(H.cams) && checked < 2 && round < maxRounds - 1 && /cin[eé]matique|animation|film|vid[eé]o|montage|trailer|bande.annonce|\bplans?\b|travelling|d[eé]couverte/i.test(String(userText)) && !/\?\s*$/.test(String(userText).trim())) {
+      checked++; history.push({ role: 'assistant', content: text });
+      history.push({ role: 'user', content: '[Vérification automatique du Studio] Aucune caméra n’a de plan : il n’y a PAS de cinématique. La demande est un montage de caméras : crée les plans maintenant (path_shot, frame_shot, orbit_shot, pov_shot) sur ce qui existe déjà dans la scène, appelle cinematic_summary, puis résume.' });
+      on({ type: 'check', text: 'Vérification : aucune caméra — l’assistant doit créer les plans…' }); continue;
+    }
+    if (rc && !want && rc.plans.length && H.dur >= 15000) { const R0 = H.C.cineRange(H.cams), got = R0 ? (R0[1] - R0[0]) / 1000 : 0; if (got < 8 && !old.size) rc.problems.push(`cinématique trop courte (${r1(got)} s) : vise 15 à 40 s — ajoute des plans de 2 à 6 s à la suite (chaque plan a une clé de début et une clé de fin)`); }
+    if (rc && want && rc.plans.length) { const R0 = H.C.cineRange(H.cams), got = R0 ? (R0[1] - R0[0]) / 1000 : 0; if (Math.abs(got - want) > Math.max(1.5, want * 0.08)) rc.problems.push(`durée demandée : ${want} s — le montage fait ${r1(got)} s : ${got > want ? 'supprime ou raccourcis des plans' : 'ajoute des plans courts'} pour arriver à ${want} s (à 1 s près)${got > want ? ` — le plus simple : fit_duration avec seconds = ${want}` : ''}`); }
     if (rc?.problems.length && checked < 2 && round < maxRounds - 1) {
       checked++; history.push({ role: 'assistant', content: text });
       history.push({ role: 'user', content: `[Vérification automatique du Studio] Le montage a encore ${rc.problems.length} problème(s) :\n- ${rc.problems.join('\n- ')}\n${rc.text}\nCorrige-les avec les outils, appelle cinematic_summary, puis donne ton résumé final — il doit correspondre exactement à la liste des plans.` });

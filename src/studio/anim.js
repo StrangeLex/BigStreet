@@ -49,7 +49,18 @@ export function createAnim(S) {
     const h = THREE ? itemOf(id) : null; if (h) return itemBase(h);
     const e = S.scene?.byKey(o.ref); return e && Number.isFinite(e.x) ? { x: e.x, y: 0, z: e.y } : null;
   }
-  const ws = (o, t = S.T) => O.worldAt(A, o, t, base);
+  /** Le repère d'un élément dans le monde, contrainte « regarder vers » comprise */
+  function ws(o, t = S.T, depth = 0) {
+    const W = O.worldAt(A, o, t, base); if (!o.look || depth > 3 || W.lost) return W;
+    const tp = lookTarget(o.look, t, depth, o); if (!tp) return W; const ch = O.isChar(o), a = O.aimAt({ x: W.x, y: W.y + (ch ? 1.5 : 0), z: W.z }, tp, o.kind === 'lumiere'); if (!a) return W;
+    const N = { ...W, ry: a.ry, ...(ch ? {} : { rx: a.rx, rz: 0 }), looked: true }; N.m = O.compose(N); return N;
+  }
+  function lookTarget(L, t, depth, self) {
+    if (L.kind === 'obj') { const o2 = byId(L.id); if (!o2 || o2 === self || O.noTR(o2)) return null; const w = ws(o2, t, depth + 1); return w.lost ? null : { x: w.x, y: w.y + (O.isChar(o2) ? 1.5 : 0.5), z: w.z }; }
+    if (L.kind === 'ent') { const p = S.scene?.posOf(L.id, t); return p ? { x: p.x, y: p.y + (L.id[0] === 'u' ? 1.5 : 0.6), z: p.z } : null; }
+    if (L.kind === 'cam') { const c = S.cams.find(x => x.id === L.id), w = c && CAMS.worldPose(c, t, S.cams, S.frame); return w ? { x: w.x, y: w.y, z: w.z } : null; }
+    return null;
+  }
   const wsT = o => cache.get(o.id) || ws(o);
 
   // ---------------------------------------------------------------- Sélection : un élément ajouté (sel) ou une entité du record (panneau Scène)
@@ -67,9 +78,10 @@ export function createAnim(S) {
     const r = O.newObj(A, 'ref', { ref: o.ref, name: o.name }); lastTarget = `${r.id}|${o.ref}`; return r;
   }
   function select(o, say = true) {
+    if (o?.keyPick) return;
     if (!o) { sel = null; }
     else if (O.entKey(o) && S.scene?.byKey(O.entKey(o))) { sel = null; const key = O.entKey(o); S.scene.select({ key, id: idOf(key) }, false); S.selectCam(null); }
-    else { sel = o.id; S.selectCam(null); S.scene?.select(null, false); if (say) S.hint(`${o.name} sélectionné — poignées : L déplacer, R tourner, T taille · K : image-clé`, 3500); }
+    else { sel = o.id; S.selectCam(null); S.scene?.select(null, false); if (say) S.hint(O.noTR(o) ? `${o.name} sélectionné — ses réglages sont à droite · K : image-clé` : `${o.name} sélectionné — poignées : L déplacer, R tourner, T taille · K : image-clé`, 3500); }
     selKeys = selKeys.filter(k => k.id === o?.id); lastTarget = '?'; renderTree(); renderPanel(); S.renderTracks();
   }
   /** Retire les surcharges vides (entité du record sélectionnée puis laissée telle quelle) */
@@ -214,7 +226,7 @@ export function createAnim(S) {
     const B = st.bones, b = a.rig?.bones; if (!b || !b.corps) return; let any = false; for (const k in B) { any = true; break; } if (!any) return;
     const follow = ['tete', 'bras_g', 'bras_d'], c = b.corps, still = !c.rotation.x && !c.rotation.y && !c.rotation.z;
     if (!still) { q3.copy(c.quaternion).invert(); for (const k of follow) if (b[k]) b[k].quaternion.premultiply(q3); }
-    for (const ch in B) { const [bn, ax] = ch.split('.'), o = b[bn]; if (o) o.rotation[ax] = B[ch]; }
+    const mx = st.mix; for (const ch in B) { const [bn, ax] = ch.split('.'), o = b[bn]; if (o) o.rotation[ax] = mx < 0.999 ? o.rotation[ax] + (B[ch] - o.rotation[ax]) * mx : B[ch]; }   // (mélange avec l'animation du jeu)
     const hip = c.position, moved = c.rotation.x || c.rotation.y || c.rotation.z;
     for (const k of follow) { const o = b[k]; if (!o) continue; const p0 = o.userData.p0 ??= o.position.clone(); if (!moved) { o.position.copy(p0); continue; } o.position.copy(p0).sub(hip).applyQuaternion(c.quaternion).add(hip); o.quaternion.premultiply(c.quaternion); }
   }
@@ -222,7 +234,7 @@ export function createAnim(S) {
   function applyChar(o, W, T, w) {
     const a = avatarOf(o); if (!a || W.lost) return; wrap(a); touched.add(a); a._stSeen = true;
     const full = o.kind === 'perso' || !!o.parent, set = ch => full || O.isSet(o, ch);
-    const st = a._st = { key: O.entKey(o), p: [set('x') ? W.x : null, set('y') ? W.y : null, set('z') ? W.z : null], rot: full || O.ROT.some(c => O.isSet(o, c)) ? [W.rx, W.ry, W.rz] : null, scl: full || O.SCL.some(c => O.isSet(o, c)) ? [W.sx, W.sy, W.sz] : null, bones: O.bonesAt(o, T), vis: W.vis };
+    const st = a._st = { key: O.entKey(o), p: [set('x') ? W.x : null, set('y') ? W.y : null, set('z') ? W.z : null], rot: full || W.looked || O.ROT.some(c => O.isSet(o, c)) ? [W.rx, W.ry, W.rz] : null, scl: full || O.SCL.some(c => O.isSet(o, c)) ? [W.sx, W.sy, W.sz] : null, bones: O.bonesAt(o, T), mix: O.chanAt(o, 'pmix', T) ?? 1, vis: W.vis };
     if (o.kind === 'perso') {   // (il marche quand ses clés le déplacent, tourné vers où il va)
       const P0 = T >= 120 ? ws(o, T - 120) : W, dx = W.x - P0.x, dz = W.z - P0.z, sp = Math.hypot(dx, dz) / 0.12, moving = o.walk && sp > 0.3;
       if (moving && o.face && !O.isAnimated(o, 'ry')) st.rot[1] = Math.atan2(dx, dz);
@@ -272,7 +284,7 @@ export function createAnim(S) {
     for (const a of touched) a._stSeen = false; for (const h of touchedItems.values()) h.seen = false; if (w.pvs) for (const V of w.pvs.values()) if (V._st) V._st.seen = false;
     for (const o of A.objs) {
       if (O.noTR(o)) continue;
-      const W = O.worldAt(A, o, T, base); cache.set(o.id, W);
+      const W = ws(o, T); cache.set(o.id, W);
       if (O.isChar(o)) { applyChar(o, W, T, w); continue; }
       if (o.kind === 'ref') { if (W.lost) continue; if (o.ref[0] === 'i') applyItem(o, W, w); else applyVeh(o, W, w); continue; }
       const n = nodeOf(o), nd = n.node, pa = o.bone && o.parent ? byId(o.parent) : null, av = pa && avatarOf(pa), bone = av?.rig?.bones?.[o.bone] || null;
@@ -283,6 +295,9 @@ export function createAnim(S) {
       if (o.kind === 'particules' && n.pts && W.vis) { const g = n.pts.geometry; O.particlesAt(o, T, g.attributes.position.array, g.attributes.color.array); g.attributes.position.needsUpdate = true; g.attributes.color.needsUpdate = true; }
       if (o.kind === 'miroir') { n.mirror.setTint(o.tint); n.mirror.mesh.userData.off = ++mirrors > O.MAX.miroir; }
       if (o.kind === 'lumiere') {
+        // (la réserve de lumières n'est créée qu'à la première lumière du projet : une seule préparation des matériaux, à ce moment-là —
+        // un PC modeste qui n'ajoute jamais de lumière ne paie rien ; ensuite elle reste, et plus rien n'est recompilé)
+        if (!pool) { makePool(); S.hint('Préparation des lumières… (une seule fois)', 3500); }
         const l = pool[o.ltype][used[o.ltype]++]; n.over = !l; if (!l) continue;
         const g = c => O.chanAt(o, c, T), on = W.vis ? g('li') : 0; nd.visible = true; for (const h of n.help) h.visible = show && !veiled;
         nd.updateMatrixWorld(true); const e = nd.matrixWorld.elements; l.position.set(e[12], e[13], e[14]); l.color.setRGB(g('cr'), g('cg'), g('cb')); l.intensity = on;
@@ -294,7 +309,7 @@ export function createAnim(S) {
     // (un objet du décor masqué par l'œil du panneau Scène, quand il est une instance d'un maillage commun : sa taille passe à zéro)
     for (const key of S.ents.hidden) if (key[0] === 'i' && !byEnt(key)) { const id = idOf(key), h = itemOf(id); if (!h || h.i === undefined) continue; const B = itemBase(h); touchedItems.set(id, h); h.seen = true;
       if (h.sig !== 'hid') { h.sig = 'hid'; m4.fromArray(O.compose({ ...B, sx: 0, sy: 0, sz: 0 })); h.m.setMatrixAt(h.i, m4); h.m.instanceMatrix.needsUpdate = true; } }
-    for (const t of Object.keys(pool)) for (let i = used[t]; i < pool[t].length; i++) { const l = pool[t][i]; if (l.intensity) l.intensity = 0; if (l.castShadow) l.castShadow = false; }
+    if (pool) for (const t of Object.keys(pool)) for (let i = used[t]; i < pool[t].length; i++) { const l = pool[t][i]; if (l.intensity) l.intensity = 0; if (l.castShadow) l.castShadow = false; }
     for (const id of [...nodes.keys()]) if (!byId(id) || O.isChar(byId(id)) || byId(id).kind === 'ref') drop(id);
     for (const a of [...touched]) if (!a._stSeen) { release(a); touched.delete(a); }
     for (const [id, h] of [...touchedItems]) if (!h.seen) { restoreItem(h); touchedItems.delete(id); }
@@ -302,7 +317,7 @@ export function createAnim(S) {
     LF = O.lightingAt(A, T); if (LF) lamps(w, now);
     // (tremblement : ajouté à la pose de la caméra à l'antenne — vue caméra, cinématique, export —, recalculée à chaque image par studio.js)
     const sk = (S.mode === 'cam' || S.mode === 'cine') ? O.shakeAt(A, T) : null; if (sk) { const c = S.cam; for (const k of ['x', 'y', 'z', 'yaw', 'roll']) c[k] += sk[k]; c.pitch = clamp(c.pitch + sk.pitch, -1.55, 1.55); }
-    followHead(); tickAudio(T);
+    followHead(); tickAudio(T); syncPaths(now); if (GR.open) drawGraph(); if (now - focusAt > 500) { focusAt = now; syncFocusUi(); }
     // (calque 2D : fondus — seulement à travers une caméra — et titres ; redessiné quand il change)
     { const ov = overlay(T, S.mode === 'cam' || S.mode === 'cine'), sig = ov ? JSON.stringify(ov) + ovCv.clientWidth + 'x' + ovCv.clientHeight : '';
       if (sig !== ovSig) { ovSig = sig; const cw = ovCv.clientWidth || 16, chh = ovCv.clientHeight || 9; if (ovCv.width !== cw || ovCv.height !== chh) { ovCv.width = cw; ovCv.height = chh; } const g = ovCv.getContext('2d'); g.clearRect(0, 0, cw, chh); O.paintOverlay(g, cw, chh, ov); } }
@@ -333,6 +348,10 @@ export function createAnim(S) {
   function rayAt(x, y) { const r = S.giz.ray(x, y); ray.set(v3.set(...r.o), new THREE.Vector3(...r.d)); return ray; }
   /** L'élément ajouté sous le pointeur, ou null */
   function pick(x, y) {
+    if (drawPath && THREE && S.giz && show) { const o = byId(drawPath); if (!o) drawPath = null; else { const W = ws(o), r = S.giz.ray(x, y), y0 = o.path?.pts.length ? o.path.pts[o.path.pts.length - 1][1] : W.y, k = Math.abs(r.d[1]) > 1e-4 ? (y0 - r.o[1]) / r.d[1] : -1;
+      if (k > 0 && k < 300) { if (!o.path) { o.path = { pts: [[+W.x.toFixed(2), +W.y.toFixed(2), +W.z.toFixed(2)]], orient: true, closed: false }; if (!O.isSet(o, 'prog')) o.st.prog = 0; } o.path.pts.push([+(r.o[0] + r.d[0] * k).toFixed(2), +y0.toFixed(2), +(r.o[2] + r.d[2] * k).toFixed(2)]); pathsAt = 0; changed(); renderPanel(); S.hint(`Point ${o.path.pts.length} posé — clique encore, ou « Terminer » dans le panneau`, 2500); }
+      return { keyPick: true }; } }
+    if (THREE && S.giz && show && pickPathKey(x, y)) return { keyPick: true };   // (un point de trajectoire : sa clé est sélectionnée)
     if (!THREE || !S.giz || !nodes.size) return null; const L = []; for (const [id, n] of nodes) { const o = byId(id); if (o && n.node.visible) for (const m of n.pick || []) if (m.visible !== false && (show || !n.help?.includes(m))) L.push(m); }
     const hit = rayAt(x, y).intersectObjects(L, false)[0]; return hit ? byId(hit.object.userData.stObj) : null;
   }
@@ -426,17 +445,15 @@ export function createAnim(S) {
   function renderTree() {
     if (!S.rec || !S.pb) { treeBox.replaceChildren(); return; }
     const tg = target(), kids = [];
+    const fam = (label, ...b) => el('div', { class: 'an-fam' }, el('small', { text: label }), el('div', {}, ...b));
     kids.push(el('div', { class: 'an-add' },
-      btn('＋ PNJ', 'Ajouter un PNJ devant la vue', () => fail(add('perso', { npc: true }))), btn('＋ Joueur', 'Ajouter un faux joueur (il prend d’abord l’apparence du joueur enregistré ; ses vêtements se règlent comme ceux des autres personnages, avec les skins de ton compte)', () => fail(add('perso', { npc: false }))),
-      btn('＋ Objet', 'Ajouter un modèle du jeu : meuble, véhicule, objet, bâtiment', () => { catOpen = !catOpen; renderTree(); if (catOpen) setTimeout(() => treeBox.querySelector('.an-cat input')?.focus(), 30); }, 'btn small' + (catOpen ? ' on' : '')),
-      btn('＋ Lumière', 'Ajouter une lumière ponctuelle (ampoule)', () => fail(add('lumiere', { ltype: 'point' }))), btn('＋ Spot', 'Ajouter un projecteur (cône de lumière, vers le bas par défaut)', () => fail(add('lumiere', { ltype: 'spot' }))), btn('＋ Soleil', 'Ajouter une lumière directionnelle', () => fail(add('lumiere', { ltype: 'dir' }))),
-      btn('＋ Particules', 'Ajouter des particules : fumée, feu, étincelles, pluie, neige, confettis (le type se choisit dans ses réglages)', () => fail(add('particules', { ptype: 'fumee' }))),
-      btn('＋ Son', 'Importer une musique ou un son (mp3, ogg, wav…) : il est posé sur la frise à l’instant courant, avec sa forme d’onde ; volume animable', () => fileIn.click()),
-      btn('＋ Titre', 'Ajouter un titre ou un sous-titre à l’écran (2D, par-dessus l’image, inclus dans l’export) — il apparaît à l’instant courant', () => fail(add('titre', { text: 'Titre', pos: 'centre', t0: Math.round(S.T), t1: Math.min(Math.round(S.rec.dur), Math.round(S.T) + 3000) }))),
-      btn('＋ Miroir', 'Ajouter un miroir (reflet réel de la scène)', () => fail(add('miroir', {}))), btn('＋ Texte', 'Ajouter un texte dans la scène (titre, panneau)', () => fail(add('texte', { text: 'Titre' }))), btn('🎞 Modèle', 'Modèles de projets : un montage tout fait (caméras, fondus, titre) sur le personnage sélectionné — sinon le joueur enregistré —, à retoucher ensuite', () => { tplOpen = !tplOpen; renderTree(); }, 'btn small' + (tplOpen ? ' on' : '')), btn('＋ Groupe', 'Ajouter un repère vide : parent d’autres éléments, pour les déplacer ensemble', () => fail(add('groupe', {})))));
+      fam('Persos', btn('＋ PNJ', 'Ajouter un PNJ devant la vue', () => fail(add('perso', { npc: true }))), btn('＋ Joueur', 'Ajouter un faux joueur (il prend d’abord l’apparence du joueur enregistré ; ses vêtements se règlent comme ceux des autres personnages, avec les skins de ton compte)', () => fail(add('perso', { npc: false })))),
+      fam('Objets', btn('＋ Objet', 'Ajouter un modèle du jeu : meuble, véhicule, objet, bâtiment', () => { catOpen = !catOpen; renderTree(); if (catOpen) setTimeout(() => treeBox.querySelector('.an-cat input')?.focus(), 30); }, 'btn small' + (catOpen ? ' on' : '')), btn('＋ Texte', 'Ajouter un texte dans la scène (titre, panneau)', () => fail(add('texte', { text: 'Titre' }))), btn('＋ Particules', 'Ajouter des particules : fumée, feu, étincelles, pluie, neige, confettis (le type se choisit dans ses réglages)', () => fail(add('particules', { ptype: 'fumee' }))), btn('＋ Groupe', 'Ajouter un repère vide : parent d’autres éléments, pour les déplacer ensemble', () => fail(add('groupe', {})))),
+      fam('Lumière', btn('＋ Lumière', 'Ajouter une lumière ponctuelle (ampoule)', () => fail(add('lumiere', { ltype: 'point' }))), btn('＋ Spot', 'Ajouter un projecteur (cône de lumière, vers le bas par défaut)', () => fail(add('lumiere', { ltype: 'spot' }))), btn('＋ Soleil', 'Ajouter une lumière directionnelle', () => fail(add('lumiere', { ltype: 'dir' }))), btn('＋ Miroir', 'Ajouter un miroir (reflet réel de la scène)', () => fail(add('miroir', {})))),
+      fam('Montage', btn('＋ Titre', 'Ajouter un titre ou un sous-titre à l’écran (2D, par-dessus l’image, inclus dans l’export) — il apparaît à l’instant courant', () => fail(add('titre', { text: 'Titre', pos: 'centre', t0: Math.round(S.T), t1: Math.min(Math.round(S.rec.dur), Math.round(S.T) + 3000) }))), btn('＋ Son', 'Importer une musique ou un son (mp3, ogg, wav…) : il est posé sur la frise à l’instant courant, avec sa forme d’onde ; volume animable', () => fileIn.click()), btn('🎞 Modèle', 'Modèles de projets : un montage tout fait (caméras, fondus, titre) sur le personnage sélectionné — sinon le joueur enregistré —, à retoucher ensuite', () => { tplOpen = !tplOpen; renderTree(); }, 'btn small' + (tplOpen ? ' on' : '')))));
     if (tplOpen) kids.push(el('div', { class: 'an-cat' }, ...Object.entries(O.TEMPLATES).map(([k, t]) => el('div', { class: 'an-cat-row', title: t, onclick: () => { const r = template(k); tplOpen = false; renderTree(); if (r.error) S.toast(`Modèle : ${r.error}`, true); else S.toast(`🎞 ${r.cams.length} plans posés${r.subject ? ` sur ${r.subject}` : ''} — P : prévisualiser · Ctrl+Z : annuler.`); } }, el('span', { text: t })))));
     if (catOpen) {
-      const list = el('div', { class: 'an-cat-list' }), fill = () => { const R = searchCatalog(catQuery); list.replaceChildren(...(R.length ? R.map(m => el('div', { class: 'an-cat-row', title: `${m.cat} — ${m.type}`, onclick: () => { fail(add('modele', { model: m.type, label: m.name })); } }, el('span', { text: m.name }), el('small', { text: m.cat }))) : [el('div', { class: 'none', text: 'Aucun modèle ne correspond.' })])); };
+      const list = el('div', { class: 'an-cat-list' }), fill = () => { const R = searchCatalog(catQuery); list.replaceChildren(...(R.length ? R.map(m => el('div', { class: 'an-cat-row', title: `${m.cat} — ${m.type}`, onclick: () => { catOpen = false; document.activeElement?.blur?.(); fail(add('modele', { model: m.type, label: m.name })); renderTree(); } }, el('span', { text: m.name }), el('small', { text: m.cat }))) : [el('div', { class: 'none', text: 'Aucun modèle ne correspond.' })])); };
       const inp = el('input', { placeholder: 'Chercher un modèle (chaise, voiture, lampadaire…)', spellcheck: 'false', value: catQuery, oninput: e => { catQuery = e.target.value; fill(); } }); fill();
       kids.push(el('div', { class: 'an-cat' }, inp, list));
     }
@@ -493,7 +510,7 @@ export function createAnim(S) {
   function sections(o, own) {
     const out = [], h = t => el('h4', { text: t }), isRef = o.kind === 'ref', ch = O.isChar(o);
     if (own) out.push(el('div', { class: 'p-title' }, el('b', { class: 'e-name', text: `${O.ICONS[o.kind]} ${o.name}` }), el('span', { class: 'e-kind', text: o.kind === 'lumiere' ? O.LTYPES[o.ltype] : O.KINDS[o.kind] })),
-      el('div', { class: 'p-btns' }, O.noTR(o) ? null : btn('🎯 Cadrer', 'Amener la vue devant cet élément (double-clic dans la liste)', () => frame(o)), O.noTR(o) || isRef ? null : btn('Dupliquer', 'Copie avec toutes ses clés (Ctrl+D)', () => duplicate(o)), btn(O.noTR(o) ? '↺ Réinitialiser' : '🗑 Supprimer', 'Ctrl+Z pour annuler', () => { remove(o); S.toast(`${o.name} ${O.noTR(o) ? 'réinitialisé' : 'supprimé'} — Ctrl+Z pour annuler.`); }, 'btn small danger')),
+      el('div', { class: 'p-btns' }, O.noTR(o) ? null : btn('🎯 Cadrer', 'Amener la vue devant cet élément (double-clic dans la liste)', () => frame(o)), O.noTR(o) || isRef ? null : btn('Dupliquer', 'Copie avec toutes ses clés (Ctrl+D)', () => duplicate(o)), btn(['ambiance', 'effets', 'lampe'].includes(o.kind) ? '↺ Réinitialiser' : '🗑 Supprimer', 'Ctrl+Z pour annuler', () => { remove(o); S.toast(`${o.name} ${['ambiance', 'effets', 'lampe'].includes(o.kind) ? 'réinitialisé' : 'supprimé'} — Ctrl+Z pour annuler.`); }, 'btn small danger')),
       text('Nom', o.name, v => { o.name = v.slice(0, 60) || O.KINDS[o.kind]; if (o.kind === 'perso') { syncPersos(); S.scene?.relist?.(); } }, { max: 60 }));
     if (o.kind === 'ambiance') {
       out.push(el('small', { class: 'muted', text: 'L’éclairage du lieu rejoué : 1 = comme dans le record, 0 = éteint. Tout est animable (◆) : une pièce qui s’assombrit, une coupure de courant, un lever de soleil…' }),
@@ -543,6 +560,13 @@ export function createAnim(S) {
     if (!o.ghost) { out.push(h('Parent'), choice('Attaché à', [['', 'Rien (libre dans la scène)'], ...others.map(x => [x.id, `${O.ICONS[x.kind]} ${x.name}`])], o.parent || '', v => { setParent(o, v || null, ''); }));
       if (par && O.isChar(par) && !ch) out.push(choice('Tenu par', [['', 'Le personnage (à ses pieds)'], ...O.BONES.map(([b, n]) => [b, n])], o.bone, v => setParent(o, o.parent, v)));
       if (held) out.push(el('small', { class: 'muted', text: 'Tenu par un os : X / Y / Z et les angles sont relatifs à cet os (Y négatif = vers la main ou le pied).' })); }
+    if (!o.ghost && !held) { const persons = (S.scene?.list || []).filter(e => e.kind === 'joueur' || e.kind === 'pnj').slice(0, 60), lk = o.look ? `${o.look.kind}|${o.look.id}` : '';
+      out.push(h('Contraintes'), choice('Regarder vers', [['', 'Rien'], ...A.objs.filter(x => x !== o && !O.noTR(x) && x.kind !== 'ref').map(x => [`obj|${x.id}`, `${O.ICONS[x.kind]} ${x.name}`]), ...persons.filter(e => e.key !== O.entKey(o)).map(e => [`ent|${e.key}`, `🧍 ${e.name}`]), ...S.cams.map(c => [`cam|${c.id}`, `🎥 ${c.name}`])], lk, v => { if (!v) delete o.look; else { const [k, id] = v.split('|'); o.look = { kind: k, id, name: '' }; } }));
+      const np = o.path?.pts.length || 0;
+      out.push(el('div', { class: 'p-btns' }, btn(drawPath === o.id ? '✔ Terminer le chemin' : '✏ Dessiner un chemin', 'Suivre un chemin : clique dans la vue pour poser ses points (à la hauteur de l’élément) ; l’élément suit ensuite la courbe selon « Avancée »', () => { drawPath = drawPath === o.id ? null : o.id; if (drawPath && S.mode !== 'free') S.setMode('free'); renderPanel(); S.hint(drawPath ? 'Clique dans la vue pour poser les points du chemin.' : '', 4000); }, 'btn small' + (drawPath === o.id ? ' on' : '')),
+        np ? btn('Effacer le chemin', '', () => { delete o.path; O.clearChan(o, 'prog'); drawPath = null; pathsAt = 0; changed(); renderPanel(); }, 'btn small danger') : null,
+        np >= 2 ? btn('Parcourir en 5 s', 'Clés d’avancée : 0 à l’instant courant, 1 cinq secondes plus tard', () => { const t = Math.round(S.T); O.setKey(o, 'prog', t, 0, 'doux'); O.setKey(o, 'prog', Math.min(S.rec.dur, t + 5000), 1); changed(); renderPanel(); }) : null));
+      if (np >= 2) out.push(slider(o, 'prog', `Avancée sur le chemin (${np} points)`, 0, 1, 0.005), el('div', { class: 'an-line' }, check('Tourné vers l’avant', o.path.orient !== false, v => { o.path.orient = v; }), check('Boucle fermée', o.path.closed, v => { o.path.closed = v; pathsAt = 0; }))); }
     // Réglages propres à chaque type
     if (o.kind === 'lumiere') {
       out.push(h('Lumière'), choice('Type', Object.entries(O.LTYPES), o.ltype, v => { if (v !== o.ltype && A.objs.filter(x => x.kind === 'lumiere' && x.ltype === v).length >= O.POOL[v]) return S.toast(`Maximum atteint : ${O.POOL[v]} lumière(s) de ce type.`, true); o.ltype = v; }), colorField(o),
@@ -564,6 +588,7 @@ export function createAnim(S) {
       check('Marche quand il se déplace', o.walk, v => { o.walk = v; }, 'Quand ses clés de position le déplacent, il marche (ou court s’il va vite) au lieu de glisser'), check('Se tourne vers où il va', o.face, v => { o.face = v; }, 'Sauf si son cap est animé par des clés'),
       el('div', { class: 'p-btns' }, btn('🗑 Supprimer ce personnage', 'Ctrl+Z pour annuler', () => remove(o), 'btn small danger'), btn('Dupliquer', '', () => duplicate(o))));
     if (ch) out.push(...charSection(o));
+    if (!o.ghost || ch) out.push(...libSection(o));
     return out.concat(keySection(o));
   }
   function preset(o, v) { for (const ch of O.AMB_CH) edit(o, ch, v[ch] ?? 1); changed(); }
@@ -575,7 +600,7 @@ export function createAnim(S) {
       btn('Fixe', 'Applique la pose sans clé (le personnage la garde tout le temps)', () => { const r = real(cur(o)); O.clearPose(r); O.applyPose(r, pick.value, 0, false); changed(); renderPanel(); }),
       btn('↺ Retirer', 'Retire toute pose : le personnage retrouve ses mouvements du jeu', () => { const r = real(cur(o)); O.clearPose(r); changed(); renderPanel(); }, 'btn small danger')));
     for (const [b, name] of O.BONES) out.push(el('div', { class: 'an-bone' }, el('b', { text: name }), ...['x', 'y', 'z'].map(a => field(o, `${b}.${a}`, a.toUpperCase(), R2D, 0, 1))));
-    out.push(el('small', { class: 'muted', text: 'Un os sans valeur suit le jeu (marche, gestes). Bras : X négatif = levé devant ; Z = écarté du corps.' }));
+    out.push(slider(o, 'pmix', 'Mélange avec l’animation du jeu', 0, 1, 0.02), el('small', { class: 'muted', text: 'Un os sans valeur suit le jeu (marche, gestes). Le mélange dose la pose par-dessus l’animation enregistrée : 1 = la pose remplace, 0,5 = à mi-chemin, 0 = le jeu seul (animable ◆). Bras : X négatif = levé devant ; Z = écarté du corps.' }));
     const em = [['coucou', { icon: '👋', name: 'Coucou (salut de la main)', dur: 2.6 }], ...Object.entries(SH().EMOTE_SHOP || {})], esel = el('select', {}, ...em.map(([k, d]) => el('option', { value: k, text: `${d.icon || ''} ${d.name}${d.dur ? ` (${d.dur} s)` : ' (en boucle)'}` })));
     out.push(el('h4', { text: 'Animations du jeu' }), el('label', { class: 'row2' }, el('span', { text: 'Animation' }), esel), el('div', { class: 'p-btns' },
       btn('▶ Lancer ici', 'L’animation démarre à l’instant courant', () => { const r = real(cur(o)); O.setClip(r, S.T, esel.value); changed(); renderPanel(); }), btn('⏹ Arrêt ici', 'L’animation en cours s’arrête à l’instant courant', () => { const r = real(cur(o)); O.setClip(r, S.T, ''); changed(); renderPanel(); })));
@@ -707,7 +732,7 @@ export function createAnim(S) {
     lb.addEventListener('dblclick', () => { A.loop = { on: true, a: 0, b: 0 }; changed(); });
     zb = el('span', { class: 'an-zoomv', text: '×1', title: 'Zoom de la frise (Ctrl + molette sur la frise)' });
     const box = el('span', { class: 'tl-extra' }, lb, btn('⚑', 'Marqueur à l’instant courant : poser / retirer (M)', () => addMark(), 'an-tl'), btn('⏮', 'Clé précédente (Maj+←)', () => jumpKey(-1), 'an-tl'), btn('⏭', 'Clé suivante (Maj+→)', () => jumpKey(1), 'an-tl'),
-      btn('−', 'Dézoomer la frise', () => setZoom(zoom / 2), 'an-tl'), zb, btn('＋', 'Zoomer la frise (Ctrl + molette)', () => setZoom(zoom * 2), 'an-tl'));
+      btn('📈', 'Éditeur de courbes : la valeur d’un réglage au fil du temps (caméra ou élément sélectionné)', () => toggleGraph(), 'an-tl'), btn('−', 'Dézoomer la frise', () => setZoom(zoom / 2), 'an-tl'), zb, btn('＋', 'Zoomer la frise (Ctrl + molette)', () => setZoom(zoom * 2), 'an-tl'));
     document.querySelector('#tracks .ruler-head').append(box);
     $('#tracks').addEventListener('wheel', e => { if (!e.ctrlKey || !S.rec) return; e.preventDefault(); setZoom(zoom * (e.deltaY < 0 ? 1.5 : 1 / 1.5), e.clientX); }, { passive: false });
   }
@@ -728,6 +753,7 @@ export function createAnim(S) {
   /** Touches (avant celles des caméras) : rend true si la touche est prise */
   function onKey(e, locked) {
     const t = target(), ctrl = (e.ctrlKey || e.metaKey) && !e.altKey, k = e.key.toLowerCase();
+    if (e.key === '?' && !ctrl) { $('#helpBtn').click(); return true; }
     if (e.shiftKey && !ctrl && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) { jumpKey(e.code === 'ArrowLeft' ? -1 : 1); return true; }
     if (!ctrl && !e.shiftKey && e.code === 'KeyM' && !locked) { addMark(); return true; }
     if (ctrl) { if (k === 'c') return copy(); if (k === 'v') return paste(); if (k === 'd' && t && !t.o.ghost && sel) { duplicate(t.o); return true; } return false; }
@@ -755,7 +781,8 @@ export function createAnim(S) {
   {
     const sel0 = el('select', { title: 'Bandes noires au format de l’image voulue', onchange: e => { cadre.ratio = +e.target.value; drawGuide(); } }, ...[[0, 'Aucun'], [2.39, 'Cinémascope 2,39:1'], [2, 'Univisium 2:1'], [1.85, 'Panoramique 1,85:1'], [1.7778, '16:9'], [1.3333, '4:3'], [1, 'Carré 1:1'], [0.5625, 'Vertical 9:16']].map(([v, t]) => el('option', { value: String(v), text: t, ...(Math.abs(v - cadre.ratio) < 0.001 ? { selected: '' } : {}) })));
     const ck = (label, key) => { const c = el('input', { type: 'checkbox' }); c.checked = !!cadre[key]; c.onchange = () => { cadre[key] = c.checked; drawGuide(); }; return el('label', { class: 'row' }, c, ` ${label}`); };
-    $('#settings').append(el('label', {}, 'Format du cadre', sel0), ck('Grille des tiers', 'thirds'), ck('Zones sûres (action 90 %, titres 80 %)', 'safe'));
+    if (cadre.paths === undefined) cadre.paths = true;
+    $('#settings').append(el('label', {}, 'Format du cadre', sel0), ck('Grille des tiers', 'thirds'), ck('Zones sûres (action 90 %, titres 80 %)', 'safe'), ck('Trajectoires dans la vue (chemins et clés des caméras et des éléments animés)', 'paths'), ck('Pelure d’oignon (l’élément sélectionné à ses clés voisines)', 'onion'));
     new ResizeObserver(drawGuide).observe($('#stage')); drawGuide();
   }
 
@@ -845,13 +872,171 @@ export function createAnim(S) {
   { const rs = el('select', { title: 'Taille de la capture' }, ...[['1920x1080', 'Full HD 1920×1080'], ['2560x1440', '1440p'], ['3840x2160', '4K 3840×2160'], ['7680x4320', '8K 7680×4320']].map(([v, t], i) => el('option', { value: v, text: t, ...(i === 2 ? { selected: '' } : {}) })));
     $('#settings').append(el('label', {}, 'Capture d’image (PNG)', rs), btn('📸 Capturer cet instant', 'Image fixe en haute résolution : ce que montre la cinématique à l’instant courant (caméras actives ; sinon la vue libre), avec les titres', async () => { const [w, h] = rs.value.split('x').map(Number); S.hint('Capture en cours…', 4000); const r = await capturePng(w, h); if (!r.ok) S.toast(`Capture impossible : ${r.error}`, true); })); }
 
+  // ---------------------------------------------------------------- Trajectoires dans la vue (comme Blender / Mine-Imator) et pelure d'oignon
+  // Le chemin de chaque caméra et de chaque élément dont la position est animée : une courbe, un point à chaque clé (cliquable : il
+  // sélectionne la clé). Pelure d'oignon : la silhouette de l'élément sélectionné à ses clés voisines (avant en rouge, après en vert).
+  const paths = new Map(), ghosts = []; let pathsAt = 0, pathKeys = [], drawPath = null, ghostSig = '';
+  const POSK = ['x', 'y', 'z'];
+  function pathOwners() {
+    const out = [], tg = target(), sc = S.selCam();
+    for (const c of S.cams) { const times = CAMS.keyTimes(c, POSK); if (times.length < 2) continue; out.push({ key: `c:${c.id}`, color: c.color, sel: sc === c, times, at: t => CAMS.worldPose(c, t, S.cams, S.frame), pick: t => S.selectCamKey(c.id, t) }); }
+    for (const o of A.objs) { if (O.noTR(o)) continue; const times = O.keyTimes(o, POSK.filter(k => o.tracks[k]?.length)); if (times.length < 2) continue;
+      out.push({ key: `o:${o.id}`, color: o.color, sel: tg?.o === o, times, at: t => { const W = ws(o, t); return W.lost ? null : { x: W.x, y: W.y + (O.isChar(o) ? 0.9 : 0.05), z: W.z }; }, pick: t => { select(o, false); selKeys = [{ id: o.id, ch: null, t }]; S.seek(t); S.renderTracks(); renderPanel(); } }); }
+    // (chemins de la contrainte « suivre un chemin » : la courbe et ses points)
+    for (const o of A.objs) if (o.path && o.path.pts.length >= 2) { const P = o.path, n = P.pts.length; out.push({ key: `p:${o.id}`, color: '#ffffff', sel: tg?.o === o, times: P.pts.map((_, i) => i * 1000), at: t => O.pathAt(P, t / ((n - 1) * 1000)), dot: t => { const q = P.pts[Math.round(t / 1000)]; return q ? { x: q[0], y: q[1], z: q[2] } : null; }, pick: () => select(o, false) }); }
+    return out;
+  }
+  function syncPaths(now) {
+    const on = show && !veiled && cadre.paths !== false && !!THREE; for (const p of paths.values()) p.grp.visible = on;
+    for (const g of ghosts) g.visible = false; if (!on) { pathKeys = []; return; }
+    if (now - pathsAt > 350) { pathsAt = now; const L = pathOwners(), seen = new Set(); pathKeys = [];
+      for (const ow of L) { seen.add(ow.key); let p = paths.get(ow.key);
+        if (!p) { const lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(241 * 3), 3)); const dg = new THREE.BufferGeometry(); dg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(120 * 3), 3));
+          const line = new THREE.Line(lg, new THREE.LineBasicMaterial({ transparent: true, depthTest: false, fog: false })), dots = new THREE.Points(dg, new THREE.PointsMaterial({ size: 9, sizeAttenuation: false, depthTest: false, transparent: true, fog: false }));
+          const grp = new THREE.Group(); for (const x of [line, dots]) { x.frustumCulled = false; x.raycast = () => {}; x.renderOrder = 998; grp.add(x); } S.world.scene.add(grp); p = { grp, line, dots }; paths.set(ow.key, p); }
+        if (p.grp.parent !== S.world.scene) S.world.scene.add(p.grp);
+        const a = ow.times[0], b = ow.times[ow.times.length - 1], n = Math.max(2, Math.min(240, Math.ceil((b - a) / 80) + 1)), P = p.line.geometry.attributes.position.array; let k = 0;
+        for (let i = 0; i < n; i++) { const w = ow.at(a + (b - a) * i / (n - 1)); if (!w) continue; P[k * 3] = w.x; P[k * 3 + 1] = w.y; P[k * 3 + 2] = w.z; k++; }
+        p.line.geometry.setDrawRange(0, k); p.line.geometry.attributes.position.needsUpdate = true;
+        const D = p.dots.geometry.attributes.position.array; let m = 0; for (const t of ow.times.slice(0, 120)) { const w = ow.dot ? ow.dot(t) : ow.at(t); if (!w) continue; D[m * 3] = w.x; D[m * 3 + 1] = w.y; D[m * 3 + 2] = w.z; m++; pathKeys.push({ ow, t, x: w.x, y: w.y, z: w.z }); }
+        p.dots.geometry.setDrawRange(0, m); p.dots.geometry.attributes.position.needsUpdate = true;
+        p.line.material.color.set(ow.color); p.dots.material.color.set(ow.sel ? '#ffffff' : ow.color); p.line.material.opacity = ow.sel ? 1 : 0.45; p.dots.material.opacity = ow.sel ? 1 : 0.7; }
+      for (const [k2, p] of [...paths]) if (!seen.has(k2)) { S.world.scene.remove(p.grp); p.line.geometry.dispose(); p.dots.geometry.dispose(); p.line.material.dispose(); p.dots.material.dispose(); paths.delete(k2); } }
+    // (pelure d'oignon : la cible à ses deux clés d'avant et ses deux d'après)
+    const tg = cadre.onion ? target() : null, o = tg?.o; if (!o || O.noTR(o)) return; const K = O.keyTimes(o, [...O.POS, ...O.ROT, ...O.SCL, 'prog'].filter(c => o.tracks[c]?.length)), T = S.T; if (K.length < 2) return;
+    const prev = K.filter(t => t < T - 30).slice(-2).reverse(), next = K.filter(t => t > T + 30).slice(0, 2), want = [...prev.map((t, i) => [t, 0xff5a5a, i]), ...next.map((t, i) => [t, 0x4be08a, i])];
+    // (de vrais fantômes : le modèle lui-même, translucide et teinté — quatre au plus ; un personnage : sa silhouette dans sa pose du moment)
+    const sig = `${o.id}|${want.map(w => w[0]).join()}|${Math.floor(now / 1500)}`;
+    if (sig !== ghostSig) { ghostSig = sig; for (const g of ghosts) { g.parent?.remove(g); } ghosts.length = 0;
+      let src = null; if (O.isChar(o)) src = avatarOf(o)?.body || null; else if (o.kind === 'ref' && o.ref[0] === 'i') { const h = itemOf(idOf(o.ref)); if (h) src = new THREE.Mesh(h.m.geometry); } else src = nodes.get(o.id)?.node.children.find(c => c.isMesh && !(nodes.get(o.id).help || []).includes(c)) || null;
+      want.forEach(([, col, i2]) => { const g = new THREE.Group(), mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: i2 ? 0.16 : 0.32, depthWrite: false, fog: false });
+        if (src) { const c = src.clone(true); c.traverse(m => { if (m.isMesh) { m.material = mat; m.castShadow = false; m.raycast = () => {}; } else if (m.isLight || m.isPoints || m.isLine) m.visible = false; }); c.position.set(0, 0, 0); if (!O.isChar(o)) { c.rotation.set(0, 0, 0); c.scale.set(1, 1, 1); } g.add(c); }
+        else { const b = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(0.6, 0.6, 0.6)), new THREE.LineBasicMaterial({ color: col, fog: false })); b.position.y = 0.3; b.raycast = () => {}; g.add(b); }
+        g.renderOrder = 997; S.world.scene.add(g); ghosts.push(g); }); }
+    want.forEach(([t], j2) => { const g = ghosts[j2]; if (!g) return; if (g.parent !== S.world.scene) S.world.scene.add(g); const W = ws(o, t); if (W.lost) return; g.visible = true; g.position.set(W.x, W.y, W.z); g.rotation.set(W.rx, W.ry, W.rz, 'YXZ'); g.scale.set(W.sx, W.sy, W.sz); });
+  }
+  /** Le point de clé d'une trajectoire sous le pointeur : la clé est sélectionnée ; rend true */
+  function pickPathKey(x, y) { if (!pathKeys.length || !S.giz) return false; let best = null; for (const k of pathKeys) { const p = S.giz.screen(k.x, k.y, k.z); if (!p.front) continue; const d = Math.hypot(p.x - x, p.y - y); if (d < 10 && (!best || d < best.d)) best = { d, k }; } if (!best) return false; best.k.ow.pick(best.k.t); S.hint(`Clé de ${fmt(best.k.t)} sélectionnée`, 1500); return true; }
+
+  // ---------------------------------------------------------------- Éditeur de courbes : la valeur d'un réglage au fil du temps
+  // (clic sur un point : le sélectionner ; glisser : changer son instant et sa valeur ; double-clic dans le vide : nouvelle clé ; la
+  // liste « courbe » choisit l'interpolation du segment qui part de la clé sélectionnée)
+  const GR = { open: false, ch: '', selT: null, sig: '', drag: null };
+  const grMode = el('select', { title: 'Tangentes de la clé sélectionnée : automatiques (la courbe choisie), poignées alignées, ou poignées libres — glisse les carrés' }, ...Object.entries(O.HMODES).map(([v, t]) => el('option', { value: v, text: t })));
+  const grCv = el('canvas', { class: 'an-graph-cv' }), grCh = el('select', { title: 'Réglage affiché' }), grEase = el('select', { title: 'Courbe du segment qui part de la clé sélectionnée' }), grInfo = el('span', { class: 'muted' });
+  const graph = el('div', { class: 'an-graph', hidden: '' }, el('div', { class: 'an-graph-bar' }, el('b', { text: '📈 Courbes' }), grCh, el('label', {}, 'courbe ', grEase), el('label', {}, 'tangentes ', grMode), grInfo, el('span', { class: 'grow' }),
+    btn('Suppr. clé', 'Supprimer la clé sélectionnée', () => { const W = grOwner(); if (!W || GR.selT == null) return; const L = W.o.tracks[GR.ch], i = L ? L.findIndex(k => k.t === GR.selT) : -1; if (i >= 0) { L.splice(i, 1); if (!L.length && W.kind === 'obj') delete W.o.tracks[GR.ch]; GR.selT = null; W.done(); } }, 'btn small'), btn('✕', 'Fermer', () => { GR.open = false; graph.hidden = true; }, 'btn small')), grCv);
+  $('#stage').append(graph); graph.addEventListener('keydown', e => e.stopPropagation());
+  const isAngle = (W, ch) => (W.kind === 'cam' ? ['yaw', 'pitch', 'roll'].includes(ch) : ch.includes('.') || O.ROT.includes(ch) || ch === 'la');
+  function grOwner() {
+    const t = target(), c = S.selCam();
+    if (t) { const o = cur(t.o); return { kind: 'obj', o, name: o.name, color: o.color, chans: O.channelsOf(o).filter(k => o.tracks[k]?.length), label: k => O.LABELS[k] || k, val: (k, tt) => O.valAt(o.tracks[k], tt), eases: O.EASES, done: () => { changed(); renderPanel(); } }; }
+    if (c) return { kind: 'cam', o: c, name: c.name, color: c.color, chans: Object.keys(c.tracks).filter(k => c.tracks[k].length), label: k => (CAMS.PARAMS.find(p => p[0] === k) || [k, k])[1], val: (k, tt) => CAMS.valAt(c.tracks[k], tt), eases: CAMS.EASES, done: () => { S.touch(); S.renderTracks(); S.renderProps(); } };
+    return null;
+  }
+  function grGeom(W) { const L = W.o.tracks[GR.ch] || [], dur = Math.max(1, S.rec.dur), w = grCv.clientWidth || 600, h = grCv.clientHeight || 150; let lo = Infinity, hi = -Infinity; for (let i = 0; i <= 120; i++) { const v = W.val(GR.ch, dur * i / 120); if (v < lo) lo = v; if (v > hi) hi = v; } for (const k of L) { lo = Math.min(lo, k.v); hi = Math.max(hi, k.v); }
+    if (!(hi - lo > 1e-6)) { lo -= 0.5; hi += 0.5; } const pad = (hi - lo) * 0.12; lo -= pad; hi += pad; return { L, dur, w, h, lo, hi, X: t => 6 + t / dur * (w - 12), Y: v => h - 8 - (v - lo) / (hi - lo) * (h - 16), T: x => clamp((x - 6) / (w - 12), 0, 1) * dur, V: y => lo + (h - 8 - y) / (h - 16) * (hi - lo) }; }
+  function drawGraph(force = false) {
+    if (!GR.open || !S.rec) return; const W = grOwner();
+    const chans = W ? W.chans : []; if (W && !chans.includes(GR.ch)) { const pref = W.kind === 'obj' ? selKeys.find(k => k.id === W.o.id && k.ch)?.ch : S.selCh; GR.ch = chans.includes(pref) ? pref : chans[0] || ''; GR.selT = null; force = true; }
+    const sigList = `${W?.kind}|${W?.o.id}|${chans.join()}|${GR.ch}`; if (grCh.dataset.sig !== sigList) { grCh.dataset.sig = sigList; grCh.replaceChildren(...chans.map(k => el('option', { value: k, text: W.label(k), ...(k === GR.ch ? { selected: '' } : {}) }))); grEase.replaceChildren(...Object.entries(W?.eases || {}).map(([v, t]) => el('option', { value: v, text: t }))); force = true; }
+    const cw = grCv.clientWidth || 600, ch2 = grCv.clientHeight || 150, sig = `${sigList}|${W ? JSON.stringify(W.o.tracks[GR.ch] || []) : ''}|${Math.round(S.T / 30)}|${GR.selT}|${cw}x${ch2}`; if (!force && sig === GR.sig) return; GR.sig = sig;
+    if (grCv.width !== cw || grCv.height !== ch2) { grCv.width = cw; grCv.height = ch2; } const g = grCv.getContext('2d'); g.clearRect(0, 0, cw, ch2);
+    if (!W || !GR.ch) { g.fillStyle = '#8a95b0'; g.font = '12px sans-serif'; g.fillText(W ? 'Aucun réglage animé : pose d’abord des clés (K ou ◆).' : 'Sélectionne une caméra ou un élément animé.', 12, 24); grInfo.textContent = ''; return; }
+    const G = grGeom(W), ang = isAngle(W, GR.ch), f = v => (ang ? `${(v * R2D).toFixed(1)}°` : v.toFixed(2));
+    g.strokeStyle = 'rgba(255,255,255,.08)'; g.lineWidth = 1; g.fillStyle = '#7f8aa6'; g.font = '10px sans-serif';
+    for (let s2 = 0; s2 <= G.dur / 1000; s2 += Math.max(1, Math.ceil(G.dur / 1000 / 14))) { const x = Math.round(G.X(s2 * 1000)) + 0.5; g.beginPath(); g.moveTo(x, 0); g.lineTo(x, G.h); g.stroke(); g.fillText(`${s2}s`, x + 2, G.h - 2); }
+    for (let i = 0; i <= 4; i++) { const v = G.lo + (G.hi - G.lo) * i / 4, y = Math.round(G.Y(v)) + 0.5; g.beginPath(); g.moveTo(0, y); g.lineTo(G.w, y); g.stroke(); g.fillText(f(v), 4, y - 2); }
+    g.strokeStyle = W.color; g.lineWidth = 2; g.beginPath(); for (let x = 6; x <= G.w - 6; x += 2) { const y = G.Y(W.val(GR.ch, G.T(x))); if (x === 6) g.moveTo(x, y); else g.lineTo(x, y); } g.stroke();
+    g.strokeStyle = 'rgba(255,255,255,.7)'; g.lineWidth = 1; g.beginPath(); g.moveTo(G.X(S.T), 0); g.lineTo(G.X(S.T), G.h); g.stroke();
+    for (const k of G.L) { const x = G.X(k.t), y = G.Y(k.v), on = k.t === GR.selT; g.beginPath(); g.arc(x, y, on ? 6 : 4.5, 0, 7); g.fillStyle = on ? '#fff' : W.color; g.fill(); g.strokeStyle = '#000'; g.stroke(); }
+    const hk = G.L.find(k => k.t === GR.selT); if (hk && hk.hm) for (const side of ['li', 'ro']) { const hd = hk[side]; if (!hd) continue; const x = G.X(hk.t + hd[0]), y = G.Y(hk.v + hd[1]); g.strokeStyle = 'rgba(255,255,255,.75)'; g.beginPath(); g.moveTo(G.X(hk.t), G.Y(hk.v)); g.lineTo(x, y); g.stroke(); g.fillStyle = '#ffd23d'; g.fillRect(x - 4, y - 4, 8, 8); }
+    if (document.activeElement !== grMode) grMode.value = hk?.hm || 'auto'; grMode.disabled = !hk;
+    const sk = G.L.find(k => k.t === GR.selT); grInfo.textContent = sk ? `${fmt(sk.t)} · ${f(sk.v)}` : `${W.name} — ${G.L.length} clé${G.L.length > 1 ? 's' : ''}`; if (sk && document.activeElement !== grEase) grEase.value = sk.ease; grEase.disabled = !sk;
+  }
+  grMode.onchange = () => { const W = grOwner(), L = W?.o.tracks[GR.ch], i = L ? L.findIndex(x => x.t === GR.selT) : -1; if (i < 0) return; const k = L[i], m = grMode.value;
+    if (m === 'auto') { delete k.hm; delete k.li; delete k.ro; }
+    else { if (!k.li || !k.ro) { const gp = i > 0 ? k.t - L[i - 1].t : 1000, gn = i + 1 < L.length ? L[i + 1].t - k.t : 1000, sl = (W.val(GR.ch, k.t + 15) - W.val(GR.ch, Math.max(0, k.t - 15))) / 30; k.li = [-gp / 3, -sl * gp / 3]; k.ro = [gn / 3, sl * gn / 3]; } k.hm = m; }
+    cache.clear(); W.done(); drawGraph(true); };
+  grCh.onchange = () => { GR.ch = grCh.value; GR.selT = null; drawGraph(true); };
+  grEase.onchange = () => { const W = grOwner(), k = W?.o.tracks[GR.ch]?.find(x => x.t === GR.selT); if (k) { k.ease = grEase.value; W.done(); drawGraph(true); } };
+  const grHit = (W, e) => { const G = grGeom(W), r = grCv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top; let best = null; for (const k of G.L) { const d = Math.hypot(G.X(k.t) - x, G.Y(k.v) - y); if (d < 9 && (!best || d < best.d)) best = { d, k }; } return { G, x, y, k: best?.k || null }; };
+  grCv.addEventListener('pointerdown', e => { const W = grOwner(); if (!W || !GR.ch) return; e.preventDefault(); const { G, k } = grHit(W, e);
+    // (une poignée de tangente de la clé sélectionnée : la glisser redessine la courbe ; alignées : l'autre poignée reste en face)
+    { const L0 = W.o.tracks[GR.ch] || [], i0 = L0.findIndex(q => q.t === GR.selT), hk = L0[i0], r0 = grCv.getBoundingClientRect(), px = e.clientX - r0.left, py = e.clientY - r0.top;
+      const side = hk?.hm ? ['ro', 'li'].find(sd => hk[sd] && Math.hypot(G.X(hk.t + hk[sd][0]) - px, G.Y(hk.v + hk[sd][1]) - py) < 9) : null;
+      if (side) { const gp = i0 > 0 ? hk.t - L0[i0 - 1].t : 60000, gn = i0 + 1 < L0.length ? L0[i0 + 1].t - hk.t : 60000, other = side === 'ro' ? 'li' : 'ro';
+        const mv = ev => { let dt = (ev.clientX - r0.left - 6) / (G.w - 12) * G.dur - hk.t; dt = side === 'ro' ? clamp(dt, 1, gn) : clamp(dt, -gp, -1); const dv = G.V(ev.clientY - r0.top) - hk.v; hk[side] = [dt, dv];
+          if (hk.hm === 'aligne' && hk[other]) { const len = Math.abs(hk[other][0]) || 1, k2 = len / Math.abs(dt); hk[other] = [-dt * k2, -dv * k2]; } cache.clear(); drawGraph(true); };
+        const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); W.done(); };
+        addEventListener('pointermove', mv); addEventListener('pointerup', up); return; } } if (!k) { GR.selT = null; S.seek(G.T(e.clientX - grCv.getBoundingClientRect().left)); drawGraph(true); return; }
+    GR.selT = k.t; drawGraph(true); const r = grCv.getBoundingClientRect(), L = W.o.tracks[GR.ch], i = L.indexOf(k), lo = i > 0 ? L[i - 1].t + 1 : 0, hi = i + 1 < L.length ? L[i + 1].t - 1 : Math.round(G.dur); let moved = false; const x0 = e.clientX, y0 = e.clientY;
+    const mv = ev => { if (!moved && Math.hypot(ev.clientX - x0, ev.clientY - y0) < 3) return; moved = true; if (!ev.shiftKey) k.t = Math.round(clamp(G.T(ev.clientX - r.left), lo, hi)); if (!ev.ctrlKey) k.v = GR.ch === 'vis' ? (G.V(ev.clientY - r.top) >= 0.5 ? 1 : 0) : G.V(ev.clientY - r.top); GR.selT = k.t; cache.clear(); drawGraph(true); };
+    const up = () => { removeEventListener('pointermove', mv); removeEventListener('pointerup', up); if (moved) W.done(); else S.seek(k.t); };
+    addEventListener('pointermove', mv); addEventListener('pointerup', up); });
+  grCv.addEventListener('dblclick', e => { const W = grOwner(); if (!W || !GR.ch) return; const { G, x, y, k } = grHit(W, e); if (k) return; const t = Math.round(G.T(x)); if (W.kind === 'obj') O.setKey(W.o, GR.ch, t, G.V(y)); else CAMS.setKey(W.o, GR.ch, t, G.V(y)); GR.selT = W.o.tracks[GR.ch].find(q => Math.abs(q.t - t) <= 45)?.t ?? t; W.done(); drawGraph(true); });
+  function toggleGraph(on = !GR.open) { GR.open = !!on; graph.hidden = !GR.open; GR.sig = ''; if (GR.open) drawGraph(true); }
+
+  // ---------------------------------------------------------------- Mise au point du flou de profondeur : un sujet par caméra
+  const fSel = el('select', { title: 'Le flou de profondeur de cette caméra reste net sur ce sujet, où qu’il aille (Automatique : son parent, sinon le personnage au centre de l’image)' });
+  const fBox = el('label', { class: 'an-focus' }, 'Mise au point sur ', fSel); $('#props').append(fBox); let fSig = '', focusAt = 0;
+  fSel.addEventListener('keydown', e => e.stopPropagation());
+  fSel.onchange = () => { const c = S.selCam(); if (!c) return; if (!fSel.value) delete A.focus[c.id]; else A.focus[c.id] = { key: fSel.value, name: fSel.selectedOptions[0]?.textContent || '' }; changed(false); };
+  function syncFocusUi() { const c = S.selCam(); if (!c || !S.pb) return; const L = [...(S.scene?.list || []).filter(e => e.kind !== 'objet').slice(0, 80).map(e => [e.key, e.name]), ...A.objs.filter(o => !O.noTR(o) && !O.isChar(o) && o.kind !== 'ref').map(o => [`o:${o.id}`, `${O.ICONS[o.kind]} ${o.name}`])], cur0 = A.focus[c.id]?.key || '', sig = `${c.id}|${cur0}|${L.map(x => x[0]).join()}`;
+    if (sig === fSig) return; fSig = sig; fSel.replaceChildren(el('option', { value: '', text: 'Automatique' }), ...L.map(([k, n]) => el('option', { value: k, text: n, ...(k === cur0 ? { selected: '' } : {}) }))); }
+  /** La position d'un sujet (entité « u:3 », élément « o:<id> ») à l'instant t */
+  function subjectAt(key, t) { if (key.startsWith('o:')) { const o = byId(key.slice(2)); if (!o || O.noTR(o)) return null; const W = ws(o, t); return { x: W.x, y: W.y + 0.5, z: W.z }; } const p = S.scene?.posOf(key, t); return p ? { x: p.x, y: p.y + (key[0] === 'u' ? 1.45 : 0.7), z: p.z } : null; }
+
+  // ---------------------------------------------------------------- Bibliothèque de l'utilisateur : poses et animations gardées (.bspose)
+  const libLoad = () => { try { return (JSON.parse(localStorage.getItem('studio.bspose') || '[]') || []).map(O.cleanSaved).filter(Boolean).slice(0, 300); } catch { return []; } };
+  const libSave = L => { try { localStorage.setItem('studio.bspose', JSON.stringify(L.slice(0, 300))); return true; } catch { return false; } };
+  function libAdd(e) { if (!e) return null; const L = libLoad().filter(x => !(x.name === e.name && x.kind === e.kind)); L.unshift(e); libSave(L); return e; }
+  /** Garde la pose (kind 'pose') ou toutes les clés (kind 'anim') d'un élément sous un nom ; rend l'entrée, ou { error } */
+  function savePose(o, name, kind = 'pose') { const nm = String(name || '').trim().slice(0, 40); if (!nm) return { error: 'donne un nom' };
+    const e = kind === 'pose' ? O.capturePose(o, S.T, nm) : O.captureAnim(o, 0, S.rec.dur, nm, O.isChar(o) ? (ch => ch.includes('.') || ch === 'pmix') : null);
+    if (!e) return { error: kind === 'pose' ? 'ce personnage n’a aucun os posé à cet instant' : 'cet élément n’a aucune clé à garder' }; return libAdd(e); }
+  function applyLib(o, name, t = S.T) { const e = libLoad().find(x => x.name === name) || libLoad().find(x => norm(x.name) === norm(name)); if (!e) return { error: `« ${name} » n’est pas dans ta bibliothèque` }; const n = O.applySaved(real(o), e, t, S.rec.dur); if (!n) return { error: 'rien à appliquer sur cet élément (canaux différents)' }; changed(); renderPanel(); return { n, name: e.name, kind: e.kind }; }
+  const libIn = el('input', { type: 'file', accept: '.bspose,application/json', hidden: '' }); document.body.append(libIn);
+  libIn.onchange = async () => { const f = libIn.files?.[0]; libIn.value = ''; if (!f) return; try { const raw = JSON.parse(await f.text()), L = (Array.isArray(raw) ? raw : raw.items || [raw]).map(O.cleanSaved).filter(Boolean); if (!L.length) throw new Error('vide'); for (const e of L.reverse()) libAdd(e); S.toast(`📥 ${L.length} pose${L.length > 1 ? 's' : ''} / animation${L.length > 1 ? 's' : ''} importée${L.length > 1 ? 's' : ''}.`); renderPanel(); } catch { S.toast('Ce fichier n’est pas un fichier .bspose lisible.', true); } };
+  function libExport(name = null) { const L = libLoad().filter(e => !name || e.name === name); if (!L.length) return false; const a = el('a', { href: URL.createObjectURL(new Blob([JSON.stringify({ bspose: 1, items: L })], { type: 'application/json' })), download: `${(name || 'mes-poses').replace(/[^A-Za-z0-9 _-]/g, '_')}.bspose` }); document.body.append(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000); return true; }
+  function libSection(o) {
+    const L = libLoad().filter(e => O.isChar(o) || e.kind === 'anim'), pick = el('select', {}, ...(L.length ? L.map(e => el('option', { value: e.name, text: `${e.kind === 'pose' ? '🧍' : '🎞'} ${e.name}` })) : [el('option', { value: '', text: '(vide)' })])), nm = el('input', { placeholder: 'Nom à donner…', maxlength: '40', spellcheck: 'false' });
+    const say = r => { if (r?.error) S.toast(`Bibliothèque : ${r.error}`, true); else renderPanel(); return r; };
+    return [el('h4', { text: 'Ma bibliothèque (poses et animations)' }), el('label', { class: 'row2' }, el('span', { text: 'Gardées' }), pick),
+      el('div', { class: 'p-btns' }, btn('◆ Appliquer ici', 'Pose ses clés à l’instant courant (une animation : rejouée à partir d’ici ; ses déplacements partent de la place actuelle)', () => { if (pick.value) { const r = say(applyLib(cur(o), pick.value)); if (r && !r.error) S.hint(`« ${r.name} » appliqué : ${r.n} clés.`, 2500); } }), btn('Exporter', 'Enregistre l’entrée choisie dans un fichier .bspose', () => { if (pick.value) libExport(pick.value); }), btn('Tout exporter', 'Toute la bibliothèque dans un fichier .bspose', () => libExport()), btn('Importer', 'Ajoute les poses d’un fichier .bspose', () => libIn.click()), btn('✕', 'Retirer l’entrée choisie de la bibliothèque', () => { libSave(libLoad().filter(e => e.name !== pick.value)); renderPanel(); }, 'btn small danger')),
+      el('label', { class: 'row2' }, el('span', { text: 'Nouvelle' }), nm), el('div', { class: 'p-btns' }, O.isChar(o) ? btn('Garder la pose', 'Les rotations d’os de cet instant, sous ce nom', () => { const r = say(savePose(cur(o), nm.value, 'pose')); if (r && !r.error) S.hint(`Pose « ${r.name} » gardée.`, 2500); }) : null, btn('Garder l’animation', O.isChar(o) ? 'Toutes les clés d’os de ce personnage, sous ce nom' : 'Toutes les clés de cet élément, sous ce nom (rejouables sur un autre élément)', () => { const r = say(savePose(cur(o), nm.value, 'anim')); if (r && !r.error) S.hint(`Animation « ${r.name} » gardée (${Object.keys(r.tracks).length} réglages).`, 2500); }))];
+  }
+
+  // ---------------------------------------------------------------- Visite guidée (au premier record ouvert ; se relance depuis l'aide)
+  // Une carte dans la colonne de gauche — elle ne recouvre ni la vue ni la frise, on peut continuer à travailler — ; l'endroit dont
+  // elle parle est entouré.
+  const TOUR = [['#view', 'La vue', 'Clique dans la vue pour prendre la caméra libre (Z Q S D, Espace, C ; Échap pour la lâcher). Clic droit maintenu : tourner sans la prendre.'],
+    ['#tabs', 'Trois onglets', '📼 Records : tes enregistrements. 🌳 Scène : tout ce que contient le record, et ce que tu y ajoutes. ✨ IA : l’assistant réalisateur.'],
+    ['.an-add', 'Ajouter', 'PNJ, faux joueur, objet du jeu, lumière, miroir, particules, son, titre… Chaque élément ajouté apparaît juste en dessous, puis sur la frise.'],
+    ['#view', 'Sélectionner et déplacer', 'Clique un objet, un personnage ou une caméra dans la vue : ses poignées apparaissent (L déplacer, R tourner, T taille). Ses réglages s’ouvrent à droite.'],
+    ['#dock', 'La frise', 'K pose une image-clé à l’instant courant. Deux clés à deux instants = un mouvement. Glisse les losanges ; Ctrl+clic pour en prendre plusieurs ; Ctrl+C / Ctrl+V.'],
+    ['#tracks .ruler-head', 'Outils de la frise', '🔁 boucle · ⚑ marqueur · ⏮ ⏭ clé précédente / suivante · 📈 éditeur de courbes · − ＋ zoom (Ctrl + molette).'],
+    ['#addCam', 'Caméras', '＋ Caméra pose une caméra là où tu regardes. Plusieurs caméras s’enchaînent dans la cinématique ; 🎬 Prévisualiser (P) la joue.'],
+    ['#export', 'Exporter', 'La page Exporter fabrique la vidéo image par image (MP4, WebM avec le son, AVI, GIF). ⚙ Vue : cadre, trajectoires, capture PNG. Touche ? : tous les raccourcis.']];
+  let tourAt = -1, tourCard = null, tourMark = null;
+  function tour(i = 0) {
+    tourMark?.classList.remove('an-tour-mark'); tourMark = null;
+    if (i < 0 || i >= TOUR.length) { tourCard?.remove(); tourCard = null; tourAt = -1; try { localStorage.setItem('studio.tour', '1'); } catch { /* tant pis */ } return; }
+    tourAt = i; const [selq, title, body] = TOUR[i]; tourMark = document.querySelector(selq); tourMark?.classList.add('an-tour-mark');
+    if (!tourCard) { tourCard = el('div', { class: 'an-tour' }); ($('#side') || document.body).insertBefore(tourCard, $('#sideFoot')); }
+    tourCard.replaceChildren(el('div', { class: 'an-tour-h' }, el('b', { text: `Visite guidée · ${title}` }), el('small', { text: `${i + 1} / ${TOUR.length}` })), el('p', { text: body }),
+      el('div', { class: 'p-btns' }, i > 0 ? btn('◀', 'Étape précédente', () => tour(i - 1)) : null, btn(i + 1 < TOUR.length ? 'Suivant ▶' : 'Terminer', '', () => tour(i + 1), 'btn small accent'), btn('Passer', 'Fermer la visite (elle se relance depuis l’aide : touche ?)', () => tour(-1))));
+  }
+  { const hb = btn('🧭 Visite guidée', 'Refaire la visite guidée du Studio', () => { $('#help').hidden = true; tour(0); }); const h3 = $('#help').querySelector('h3'); if (h3) h3.after(hb); else $('#help').prepend(hb); }
+
   // ---------------------------------------------------------------- Le projet
   function load(raw) {
     A = O.cleanAnim(raw); if (S.rec) O.clampAnim(A, S.rec.dur); if (!S.pb) cleanup(); sel = sel && byId(sel) ? sel : null; selKeys = []; ghost = null; lastTarget = '?';
     const ch = syncPersos(); if (ch) S.scene?.relist?.();
     renderTree(); renderPanel();
+    { let seen = '1'; try { seen = localStorage.getItem('studio.tour'); } catch { seen = '1'; } if (S.pb && !seen && tourAt < 0) tour(0); }   // (premier record ouvert : la visite guidée)
   }
-  function cleanup() { stopAudio(); for (const id of [...nodes.keys()]) drop(id); for (const a of touched) release(a); touched.clear(); for (const h of touchedItems.values()) restoreItem(h); touchedItems.clear(); handles.clear(); if (pool) for (const L of Object.values(pool)) for (const l of L) l.intensity = 0; sel = null; selKeys = []; ghost = null; LF = null; lampList = []; panel.hidden = true; panel.replaceChildren(); treeBox.replaceChildren(); }
+  function cleanup() { stopAudio(); drawPath = null; ghostSig = ''; for (const g of ghosts) g.parent?.remove(g); ghosts.length = 0; for (const p of paths.values()) { p.grp.parent?.remove(p.grp); } paths.clear(); pathKeys = []; for (const g of ghosts) g.visible = false; for (const id of [...nodes.keys()]) drop(id); for (const a of touched) release(a); touched.clear(); for (const h of touchedItems.values()) restoreItem(h); touchedItems.clear(); handles.clear(); if (pool) for (const L of Object.values(pool)) for (const l of L) l.intensity = 0; sel = null; selKeys = []; ghost = null; LF = null; lampList = []; panel.hidden = true; panel.replaceChildren(); treeBox.replaceChildren(); }
   let clockSt = null;
   /** Applique un modèle de projet (objets.js, TEMPLATES) sur un sujet (clé d'entité ; par défaut l'entité sélectionnée, sinon le joueur enregistré) */
   function template(name, subjectKey = null, opts = {}) {
@@ -864,7 +1049,7 @@ export function createAnim(S) {
   }
   const api = {
     O, get data() { return A; }, get objs() { return A.objs; }, get sel() { return sel; }, get selKeys() { return selKeys; }, get target() { return target(); }, byId, byEnt, ws, add, remove, duplicate, setParent, select, real, changed,
-    sceneLamps, ambiance, lampObj, searchCatalog, capturePng, overlay, template, importAudio, mixAudio, get audio() { return AU; }, syncPersos, frame, keyPose, setZoom, addMark, jumpKey, get zoom() { return zoom; },
+    sceneLamps, ambiance, lampObj, searchCatalog, capturePng, overlay, template, tour, get tourAt() { return tourAt; }, savePose, applyLib, libLoad, libExport, subjectAt, get focus() { return A.focus; }, setFocus(camId, key, name = '') { if (!key) delete A.focus[camId]; else A.focus[camId] = { key, name }; fSig = ''; changed(false); }, toggleGraph, get graph() { return GR; }, get paths() { return paths; }, get pathKeys() { return pathKeys; }, get ghosts() { return ghosts; }, get cadre() { return cadre; }, pickPathKey, importAudio, mixAudio, get audio() { return AU; }, syncPersos, frame, keyPose, setZoom, addMark, jumpKey, get zoom() { return zoom; },
     /** L'élément d'une entité du record (créé au besoin) : pour l'animer */
     entity(key, create = true) { let o = byEnt(key); if (!o && create && S.scene?.byKey(key)) o = O.newObj(A, 'ref', { ref: key, name: S.scene.byKey(key).name }); return o || null; },
     find(q) { const n = norm(q).trim(); if (!n) return null; return A.objs.find(o => o.id === q) || A.objs.find(o => norm(o.name) === n) || A.objs.find(o => norm(o.name).includes(n)) || null; },
@@ -877,7 +1062,7 @@ export function createAnim(S) {
     // (partie « anim » du projet — enregistrée, rechargée, annulée avec le reste : cf. « extras » dans studio.js)
     save() { prune(); return O.hasAnim(A) ? A : undefined; }, has() { return O.hasAnim(A) && (prune(), O.hasAnim(A)); }, keyTimes() { return A.objs.flatMap(o => O.keyTimes(o)); }, clampTimes(dur) { O.clampAnim(A, dur); }, renderTrack(wrapEl, dur) { renderRows(wrapEl, dur); },
     /** Le moteur est prêt : objets 3D, réserve de lumières (créée AVANT le premier lieu : ses shaders la comptent dès le départ) */
-    async engine(T3, giz) { THREE = T3; e3 = new THREE.Euler(); q3 = new THREE.Quaternion(); v3 = new THREE.Vector3(); m4 = new THREE.Matrix4(); ray = new THREE.Raycaster(); G = await import('/js/game.js'); makePool(); giz?.setExt(ext);
+    async engine(T3, giz) { THREE = T3; e3 = new THREE.Euler(); q3 = new THREE.Quaternion(); v3 = new THREE.Vector3(); m4 = new THREE.Matrix4(); ray = new THREE.Raycaster(); G = await import('/js/game.js'); giz?.setExt(ext);
       if (giz) { const v = giz.veil.bind(giz); giz.veil = on => { v(on); veiled = !!on; for (const n of nodes.values()) for (const h of n.help || []) h.visible = show && !on; }; } },
     /** Le repère d'un personnage ou d'un véhicule du record, corrigé de ses surcharges (parents des caméras, assistant) : f = { x, y, z, yaw } */
     fixFrame(parent, t, f, originY) {
@@ -885,6 +1070,8 @@ export function createAnim(S) {
       return { x: set('x') ? W.x : f.x, y: set('y') ? W.y + originY * W.sy : f.y, z: set('z') ? W.z : f.z, yaw: set('ry') ? (parent.kind === 'perso' ? Math.PI / 2 - W.ry : W.ry) : f.yaw };
     },
     mixAudio, encodeAudio,
+    /** La distance de mise au point d'une caméra qui a un sujet choisi (w : sa pose dans le monde), ou null (automatique) */
+    focusDist(c, w) { const f = c && A.focus[c.id]; if (!f || !w) return null; const p = subjectAt(f.key, S.T); return p ? Math.max(0.3, Math.hypot(p.x - w.x, p.y - w.y, p.z - w.z)) : null; },
     /** Le temps avance de dOut ms de vidéo depuis T (ralenti, accéléré, images figées) : rend le nouvel instant du record */
     advance(T, dOut) { if (!O.hasRemap(A)) { clockSt = null; return T + dOut; } if (!clockSt || Math.abs(clockSt.T - T) > 0.5) clockSt = { T, used: {} }; O.advanceTime(A, clockSt, dOut); return clockSt.T; },
     /** Les instants de chaque image d'un export (null : temps normal) */

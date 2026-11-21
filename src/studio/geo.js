@@ -226,21 +226,22 @@ export function createGeo(soup, map = {}) {
   function route(a, b, { step = 0.5, pad = 8, maxNodes = 6000, margin = 0.3 } = {}) {
     if (blockedAt(a, b) === null && free(b, margin)) return [a, b];
     const x0 = Math.min(a.x, b.x) - pad, z0 = Math.min(a.z, b.z) - pad, W = Math.ceil((Math.abs(a.x - b.x) + 2 * pad) / step) + 1, H = Math.ceil((Math.abs(a.z - b.z) + 2 * pad) / step) + 1;
-    if (W * H > 90000) return null;
+    if (W * H > 260000) return null;
     const L = Math.hypot(b.x - a.x, b.z - a.z) || 1, yAt = (x, z) => { const u = Math.max(0, Math.min(1, ((x - a.x) * (b.x - a.x) + (z - a.z) * (b.z - a.z)) / (L * L))); return a.y + (b.y - a.y) * u; };
     const P = k => { const i = k % W, j = (k - i) / W, x = x0 + i * step, z = z0 + j * step; return { x, y: yAt(x, z), z }; };
     const K = p => Math.round((p.z - z0) / step) * W + Math.round((p.x - x0) / step), ks = K(a), ke = K(b);
     const okCache = new Map(), ok = k => { let v = okCache.get(k); if (v === undefined) { v = k === ks || k === ke || free(P(k), margin); okCache.set(k, v); } return v; };
     const g = new Map([[ks, 0]]), came = new Map(), open = [[0, ks]], pe = P(ke); let nodes = 0, done = false;
+    const push = e => { let i = open.push(e) - 1; while (i > 0) { const p = (i - 1) >> 1; if (open[p][0] <= open[i][0]) break; [open[p], open[i]] = [open[i], open[p]]; i = p; } };
+    const pop = () => { const top = open[0], last = open.pop(); if (open.length) { open[0] = last; let i = 0; for (;;) { const l = 2 * i + 1, r = l + 1; let m = i; if (l < open.length && open[l][0] < open[m][0]) m = l; if (r < open.length && open[r][0] < open[m][0]) m = r; if (m === i) break; [open[m], open[i]] = [open[i], open[m]]; i = m; } } return top; };
     while (open.length && nodes++ < maxNodes) {
-      let bi = 0; for (let i = 1; i < open.length; i++) if (open[i][0] < open[bi][0]) bi = i;
-      const [, k] = open.splice(bi, 1)[0]; if (k === ke) { done = true; break; }
+      const [, k] = pop(); if (k === ke) { done = true; break; }
       const i = k % W, j = (k - i) / W, pk = k === ks ? a : P(k), gk = g.get(k);
       for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
         if (!di && !dj) continue; const ni = i + di, nj = j + dj; if (ni < 0 || nj < 0 || ni >= W || nj >= H) continue;
         const nk = nj * W + ni; if (!ok(nk)) continue; const pn = nk === ke ? b : P(nk); if (blockedAt(pk, pn) !== null) continue;
         const ng = gk + Math.hypot(di, dj) * step; if (ng >= (g.get(nk) ?? Infinity)) continue;
-        g.set(nk, ng); came.set(nk, k); open.push([ng + Math.hypot(pn.x - pe.x, pn.z - pe.z), nk]);
+        g.set(nk, ng); came.set(nk, k); push([ng + Math.hypot(pn.x - pe.x, pn.z - pe.z), nk]);
       }
     }
     if (!done) return null;
