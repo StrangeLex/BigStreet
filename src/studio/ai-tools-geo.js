@@ -93,6 +93,7 @@ export const GEO_TOOLS = [
   T('line_of_sight', 'Le sujet est-il visible depuis un point ou une caméra à un instant ? Rend visible et la distance du premier obstacle.', P({ camera: CAM, x: N('X'), y: N('Y'), z: N('Z'), to: { type: 'object', description: 'Entité ou point à voir.', properties: PT, additionalProperties: false }, t: TS }, ['to'])),
   T('check_cameras', 'Contrôle moteur des trajectoires, échantillon par échantillon (mur, meuble, plafond, sol, vide, hors carte, sujet caché), avec correction automatique. Sans « camera » : seules les caméras créées par l’assistant sont corrigées ; celles posées à la main par l’utilisateur sont mesurées sans être modifiées, sauf include_user. Rend les comptes mesurés avant et après.', P({ camera: CAM, fix: B('Corriger (défaut vrai).'), include_user: B('Corriger aussi les caméras de l’utilisateur (seulement s’il le demande).') }), true),
   T('path_shot', 'Travelling le long d’un CHEMIN PRATICABLE calculé (contourne murs et meubles, passe par les portes) : visite, couloir, d’une pièce à l’autre. waypoints dans l’ordre : { place: "pièce" }, { entity } (s’arrête devant) ou { x, z }. 1 à 2,5 m/s conseillés.', P({ camera: Sx('Nom de la caméra.'), waypoints: { type: 'array', description: 'Étapes (au moins 2).', items: { type: 'object', properties: { place: Sx('Nom de pièce.'), entity: ENT, x: N('X'), z: N('Z') }, additionalProperties: false } }, from: N('Début (s).'), to: N('Fin (s).'), height: N('Hauteur au-dessus du sol (m), défaut 1,5 ; 0,5 = ras du sol.'), look: { description: '"devant" (défaut), ou entité / point à regarder.', anyOf: [{ type: 'string' }, { type: 'object', properties: PT, additionalProperties: false }] }, pitch: N('°, défaut 0.'), fov: N('°, défaut 65.'), ease: Sx('Interpolation.', { enum: ['fluide', 'doux', 'accel', 'frein'] }) }, ['camera', 'waypoints', 'from', 'to']), true),
+  T('review_shots', 'Tes YEUX : le Studio rend de petites images des plans (début, milieu, fin) et un modèle qui voit les critique — sujet visible et lisible, obstruction, cadrage, lumière, cohérence avec la demande. Rend, par image : ce qu’on voit, le défaut, un conseil, une note. À appeler après avoir créé ou corrigé des plans ; « camera » pour un seul plan (3 images).', P({ camera: CAM, intent: Sx('Ce que l’utilisateur veut, en une phrase.') })),
   T('fit_duration', 'Ramène la cinématique à une durée totale (secondes) : les plans du début sont gardés, le plan qui dépasse est resserré, ceux d’après sont supprimés. À utiliser quand l’utilisateur a demandé une durée précise et que le montage est trop long.', P({ seconds: N('Durée totale voulue (s).') }, ['seconds']), true),
   T('pov_shot', 'VRAIE vue subjective : la caméra EST les yeux d’un personnage (défaut : le joueur) de from à to, avec son regard du record ; sa tête est masquée. Le seul outil pour « vue subjective », « première personne », « POV ».', P({ camera: Sx('Nom de la caméra.'), subject: ENT, from: N('Début (s).'), to: N('Fin (s).'), fov: N('°, défaut 75.') }, ['camera', 'from', 'to']), true),
 ];
@@ -107,6 +108,7 @@ export const GEO_PROMPT = `
 - Vue subjective / première personne / « par ses yeux » : pov_shot, et rien d'autre.
 - CONTRÔLE MOTEUR : après chaque action sur une caméra, le moteur vérifie sa trajectoire échantillon par échantillon (murs, meubles, modèles, plafond, sol, vide, hors carte, sujet caché), la corrige lui-même et te rend « controle_moteur » avec les comptes mesurés. Ces comptes sont la seule vérité : ne dis JAMAIS « corrigé » ou « plus de murs traversés » si « restants » n'est pas 0 — dis ce qui reste et propose une autre approche (free_spots, path_shot, plan plus court). Ne décale pas des coordonnées au hasard pour « corriger » : rappelle l'outil de cadrage ou check_cameras.
 - ACTIONS REFUSÉES : un outil qui répond ✗ n'a RIEN fait. Ne dis jamais qu'une chose est faite si son outil a répondu ✗ : réessaie autrement (autre outil, autre paramètre — le message d'erreur dit lesquels), ou dis clairement à l'utilisateur ce qui n'a pas pu être fait et pourquoi. Un outil plus large utilisé à la place (ex. tout le lieu au lieu d'une pièce) doit être annoncé comme tel. Le Studio écrit de toute façon sous ta réponse la liste des actions refusées.
+- Tes yeux : review_shots montre les plans à un modèle qui voit et te rend sa critique ; le Studio le fait aussi de lui-même avant d'accepter ta conclusion. Reprends les plans signalés (sujet caché, obstruction, cadrage), pas les autres.
 - Raytracing : 0 à 100 ; jusqu'à 300 pour un compte VIP (rendu poussé : occlusion plus profonde, halos et reflets renforcés). update_camera règle aussi rt_ao, rt_radius, rt_bloom, rt_reflets (0 à 200, 100 = normal).`;
 
 /** L'extension du moteur d'actions : { tools, prompt, create(H, kit) → { RUN, after(name, args, result), problems(), recapText(), digest() } } */
@@ -230,6 +232,44 @@ export function createGeoExt() {
       S.forEach((s, i) => { const w = K.list[i]; if (!w || w === 'non_verifie') return; const o = per.get(s.cam) || { n: 0, reasons: {}, from: s.t, to: s.t, id: s.id }; o.n++; o.reasons[w] = (o.reasons[w] || 0) + 1; o.to = s.t; per.set(s.cam, o); });
       return { n: K.n, bad: K.bad, checked: K.checked, reasons: K.reasons, per };
     }
+    /** Les plans à l'antenne : [{ c (caméra), from, to }] */
+    function plansNow() { const R = C.cineRange(H.cams), out = []; if (!R) return out; for (let t = R[0]; t <= R[1]; t += 100) { const c = C.activeCam(H.cams, t); if (!c) continue; const l = out[out.length - 1]; if (l && l.c === c) l.to = t; else out.push({ c, from: t, to: t }); } return out; }
+    const VISION = `Tu es chef opérateur : tu contrôles les images d'une cinématique tournée dans un jeu vidéo en blocs 3D (personnages et décors cubiques, c'est normal ; ignore l'interface s'il y en a). Pour CHAQUE image, juge : le sujet attendu est-il visible et lisible (ni caché, ni coupé, ni minuscule) ; obstruction (mur, meuble ou objet en très gros plan devant l'objectif ; caméra dans un mur ou hors du décor : image vide, noire ou d'une seule couleur) ; cadrage (sujet trop centré ou coupé, horizon penché sans raison) ; lumière (trop sombre, contre-jour) ; cohérence avec la demande. TIENS COMPTE DE L'INTENTION : si la demande veut une ambiance sombre (horreur, nuit, angoisse, mystère), l'obscurité, la vignette, le grain et les couleurs froides sont VOULUS — ne signale alors l'image que si le sujet attendu n'est plus reconnaissable ou si l'image est illisible ; un plan de lieu sans personnage est normal quand le sujet attendu est « le lieu ». Sois strict mais juste : une image correcte reçoit « correct ». Réponds UNIQUEMENT par un tableau JSON, un objet par image, dans l'ordre : [{"image":1,"vu":"ce qu'on voit, une phrase","sujet_visible":true,"defaut":"correct, ou le défaut principal","conseil":"comment corriger (rapprocher, changer de côté, monter ou baisser la caméra, éclairer…) ou vide","note":7}] — note de 0 à 10.`;
+    const wanted = (c, t) => (c.pov ? 'vue subjective (pas de sujet à l’image : on voit ce que voit le personnage)' : c.parent && c.parent.kind !== 'camera' ? c.parent.name : c.aim ? H.entities().find(x => x.key === c.aim)?.name || 'le sujet' : c.path ? 'le lieu (travelling de visite)' : 'le lieu ou le joueur');
+    /** Rend des images des plans, les fait critiquer par le modèle qui voit : { rows, flagged: [noms], total, error } ou null (indisponible) */
+    async function look(intent = '', only = null) {
+      if (!H.snap || !H.vision) return null;
+      let P = plansNow().filter(p => p.to - p.from >= 300); if (only) P = P.filter(p => p.c === only); if (!P.length) return null;
+      const MAX = 6, per = P.length === 1 ? 3 : P.length <= 3 ? 2 : 1; if (P.length > MAX) P = Array.from({ length: MAX }, (_, i) => P[Math.round(i * (P.length - 1) / (MAX - 1))]);
+      const shots = []; for (const p of P) { const d = p.to - p.from; for (const t of per === 3 ? [p.from + 150, p.from + d / 2, p.to - 150] : per === 2 ? [p.from + d * 0.2, p.to - d * 0.2] : [p.from + d / 2]) shots.push({ p, t: Math.round(t) }); }
+      const imgs = []; for (const sh of shots.slice(0, MAX)) { const url = await H.snap(sh.t); if (typeof url === 'string' && url.startsWith('data:image/') && url.length < 200000) imgs.push({ ...sh, url }); }
+      if (!imgs.length) return { error: 'aucune image n’a pu être rendue' };
+      const list = imgs.map((sh, i) => `Image ${i + 1} : plan « ${sh.p.c.name} » à ${r1(sh.t / 1000)} s — sujet attendu : ${wanted(sh.p.c, sh.t)}`).join('\n');
+      const res = await H.vision([{ role: 'system', content: VISION }, { role: 'user', content: [{ type: 'text', text: `Demande de l'utilisateur : « ${String(intent || 'une belle cinématique').slice(0, 300)} »\n${list}` }, ...imgs.map(sh => ({ type: 'image_url', image_url: { url: sh.url } }))] }]);
+      const raw = String(res?.message?.content || ''); if (!raw) return { error: String(res?.error || 'le modèle qui voit n’a pas répondu').slice(0, 200) };
+      let A0 = null; try { const i = raw.indexOf('['), j = raw.lastIndexOf(']'); A0 = JSON.parse(raw.slice(i, j + 1)); } catch { A0 = null; }
+      if (!Array.isArray(A0)) return { error: 'critique illisible', brut: raw.slice(0, 300) };
+      const rows = imgs.map((sh, i) => { const k = A0.find(x => +x?.image === i + 1) || A0[i] || {}, note = num(k.note); return { plan: sh.p.c.name, t: r1(sh.t / 1000), vu: String(k.vu || '').slice(0, 200), sujet_visible: k.sujet_visible !== false, defaut: String(k.defaut || 'correct').slice(0, 160), conseil: String(k.conseil || '').slice(0, 200), note, noSubject: !!(sh.p.c.pov || sh.p.c.path) }; });
+      const bad = r => (r.note !== null && r.note < 6) || (!r.sujet_visible && !r.noSubject) || /dans un mur|hors du d[eé]cor|image vide|obstru|cach[eé]|noir/i.test(r.defaut);
+      for (const r of rows) { r.a_reprendre = bad(r); delete r.noSubject; }
+      return { rows, flagged: [...new Set(rows.filter(r => r.a_reprendre).map(r => r.plan))], total: new Set(rows.map(r => r.plan)).size, images: imgs.length };
+    }
+    /**
+     * Recadre de lui-même un plan que la critique visuelle signale (sujet invisible, mal visé, trop loin) quand son sujet est connu :
+     * à chaque clé, la caméra va à une position libre d'où le sujet est en vue, pas plus loin que 4,5 m, et le vise. Rend vrai si fait.
+     */
+    function reframe(c) {
+      const G = geo(); if (!G || c.pov || c.path) return false; let n = 0;
+      for (const t of C.keyTimes(c, ['x', 'y', 'z'])) {
+        const w = wAt(c, t), tg0 = w && targetOf(c, t, w); if (!tg0) continue;
+        const tg = { x: tg0.x, y: tg0.y, z: tg0.z }, floor = tg0.floor ?? (G.groundAt(tg.x, tg.z, tg.y) ?? tg.y - 1.4), d0 = Math.hypot(w.x - tg.x, w.z - tg.z);
+        const f = G.freeSpots(tg, { n: 1, floorY: floor, rMin: 1.3, rMax: 6, heights: [1.5, 1.1, 2.0], prefer: { az: Math.atan2(w.z - tg.z, w.x - tg.x), dist: clamp(d0, 1.8, 4.5) } })[0]; if (!f) continue;
+        const dx = tg.x - f.x, dy = tg.y - f.y, dz = tg.z - f.z;
+        writePose(c, t, c.look && c.parent ? { x: f.x, y: f.y, z: f.z } : { x: f.x, y: f.y, z: f.z, yaw: Math.atan2(dz, dx), pitch: clamp(Math.atan2(dy, Math.hypot(dx, dz)), -1.2, 1.2), roll: 0 }); n++;
+      }
+      if (n) { for (const k of c.tracks.fov) k.v = clamp(k.v, 30, 60); control(c, true); }
+      return n > 0;
+    }
     const MOVERS = new Set(['create_camera', 'set_keys', 'frame_shot', 'orbit_shot', 'set_parent', 'move_keys', 'duplicate_camera', 'delete_keys', 'path_shot']);
     const sideOf = (az, yaw) => { const d = Math.atan2(Math.sin(az - yaw), Math.cos(az - yaw)) * R2D; return SIDE_NAMES.reduce((b, s) => (Math.abs(Math.atan2(Math.sin((d - s[0]) * D2R), Math.cos((d - s[0]) * D2R))) < Math.abs(Math.atan2(Math.sin((d - b[0]) * D2R), Math.cos((d - b[0]) * D2R))) ? s : b))[1]; };
 
@@ -319,6 +359,14 @@ export function createGeoExt() {
         const speed = len / ((t1 - t0) / 1000);
         return ok(`${made ? `Caméra « ${c.name} » créée : ` : `${c.name} : `}travelling de ${r1(len)} m le long d’un chemin praticable (${names.join(' → ')}), de ${fmtT(t0)} à ${fmtT(t1)}, à ${r1(hgt)} m du sol, ${r1(speed)} m/s${speed > 3.2 ? ' — ⚠ rapide : allonge la durée ou raccourcis le trajet (1 à 2,5 m/s conseillés)' : ''} — ce plan occupe ${fmtT(t0)} → ${fmtT(t1)} : fais commencer le plan suivant à ${fmtT(t1)} (un plan posé sur le même intervalle le recouvrirait).`, { camera: c.name, creee: made, longueur_m: r1(len), vitesse_m_s: r1(speed), cles: n, etapes: names });
       },
+      review_shots(a) {
+        if (!H.snap || !H.vision) return ko('review_shots : la critique visuelle n’est pas disponible ici.');
+        const one = a.camera ? camOf(a.camera) : null; if (a.camera && !one) return noCam(a.camera, 'review_shots'); if (!plansNow().length) return ko('review_shots : pas encore de plan à regarder (il faut une caméra avec deux clés).');
+        return { ok: true, text: '✓ Critique visuelle des plans en cours (rendu des images, puis un modèle qui voit)…', data: {}, later: async () => {
+          const L = await look(a.intent || '', one); if (!L) return ko('review_shots : rien à regarder.'); if (L.error) return ko(`review_shots : ${L.error}.`);
+          return ok(`Critique visuelle : ${L.images} image${L.images > 1 ? 's' : ''} de ${L.total} plan${L.total > 1 ? 's' : ''} — ${L.flagged.length ? `${L.flagged.length} à reprendre (${L.flagged.map(n => `« ${n} »`).join(', ')})` : 'rien à reprendre'}.`, { images: L.rows, plans_a_reprendre: L.flagged });
+        } };
+      },
       fit_duration(a) {
         const want = num(a.seconds), R = C.cineRange(H.cams); if (!R) return ko('fit_duration : pas encore de cinématique.'); if (want === null || want < 2) return ko('fit_duration : donne « seconds » (durée totale voulue, au moins 2 s).');
         const end = R[0] + Math.round(want * 1000), got = (R[1] - R[0]) / 1000; if (got <= want + 0.3) return ko(`La cinématique fait ${r1(got)} s : elle ne dépasse pas ${want} s (pour l’allonger, ajoute des plans courts).`);
@@ -368,6 +416,17 @@ export function createGeoExt() {
         return M.bad ? `Contrôle moteur des caméras : ${M.bad} échantillon${M.bad > 1 ? 's' : ''} sur ${M.checked} encore en défaut (${reasonsText(M.reasons)}).` : `Contrôle moteur des caméras : ${M.checked} échantillons vérifiés (tous les ${M.n > 1 ? 'dixièmes de seconde' : 'instants'}), aucun dans un mur, un modèle, le vide ou hors carte${nv ? ` ; ${nv} hors de la zone chargée, non vérifiés` : ''}.`;
       },
       digest() { try { return H.geo?.brief?.() || null; } catch { return null; } },
+      /** La critique visuelle du montage (appelée par le moteur avant d'accepter la conclusion) : { fix, flagged, total, short, text } ou null */
+      async review(intent) {
+        const L = await look(intent); if (!L || L.error) { if (L?.error) console.warn('critique visuelle :', L.error); return null; }
+        const say = R0 => R0.rows.filter(r => r.a_reprendre).map(r => `- plan « ${r.plan} » (image à ${r.t} s) : ${r.defaut}${r.vu ? ` — on voit : ${r.vu}` : ''}${r.conseil ? ` — conseil : ${r.conseil}` : ''}`).join('\n'), names = L0 => L0.map(n => `« ${n} »`).join(', ');
+        const out = { fix: L.flagged.length > 0, flagged: L.flagged.length, total: L.total, short: names(L.flagged), text: say(L), rows: L.rows };
+        // (les plans signalés dont le sujet est connu sont recadrés par le moteur lui-même — le modèle retouchait la vignette au lieu de déplacer la caméra —, puis regardés de nouveau)
+        const done = L.flagged.filter(nm => { const c = H.cams.find(x => x.name === nm); try { return !!c && reframe(c); } catch (e) { console.warn('recadrage', e); return false; } });
+        if (done.length) { H.changed?.(); let L2 = await look(intent); if (!L2 || L2.error) L2 = await look(intent);   // (un second essai si le modèle qui voit a répondu de travers)
+          if (L2 && !L2.error) { out.auto = { n: done.length, names: names(done), after: L2.flagged.length }; out.fix = L2.flagged.length > 0; out.text = `${say(L2)}${say(L2) ? '\n' : ''}(Le moteur a déjà recadré lui-même ${names(done)} : caméra rapprochée, sujet visé — n’y touche plus${L2.flagged.length ? ', sauf s’ils sont encore signalés ci-dessus' : ''}.)`; out.short = names(L2.flagged); out.rows = L2.rows; } else out.auto = { n: done.length, names: names(done), after: null }; }
+        return out;
+      },
       control, montage,
     };
   } };

@@ -166,6 +166,12 @@ Rien ne s'enregistre tant que tu ne l'as pas demandé.
   de l'assistant : c'est ce qui permet de rejouer une session de l'IA pour
   corriger ses erreurs. Les records sur lesquels tu n'utilises pas l'assistant
   ne quittent jamais ton ordinateur.
+  L'assistant a aussi des **yeux** : pour vérifier ses plans, le Studio rend
+  quelques petites images de la cinématique (6 au plus, 480 pixels de large,
+  JPEG) et les envoie par la même route à un modèle qui voit les images, qui
+  en fait la critique (sujet caché, cadrage, obstruction). Ces images ne sont
+  ni enregistrées ni journalisées par le site (le journal n'en garde que le
+  nombre) ; elles ne partent que pendant un échange avec l'assistant.
 - L'export vidéo se fait dans le Studio, sans programme externe : rendu image
   par image, encodage par le navigateur intégré (WebCodecs : VP9, H.264),
   conteneurs WebM / MP4 / AVI / GIF écrits par `src/studio/encoders.js`.

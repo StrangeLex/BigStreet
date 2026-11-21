@@ -3,7 +3,7 @@
 // Chaque message qui modifie le projet garde un point de restauration : « Revenir à avant ce message » remet le projet ET la
 // conversation dans l'état d'avant — on peut aussi, simplement, demander des changements. Les échanges passent par le processus
 // principal du launcher (le jeton de session n'est jamais dans cette page), qui les relaie au site : POST /api/studio/ai.
-import { runTurn } from '/__studio/ai-tools.js';
+import { runTurn, CONTINUE } from '/__studio/ai-tools.js';
 
 const IDEAS = ['Fais une cinématique complète et soignée de cette scène.', 'Ouvre sur un plan large du lieu, puis un gros plan sur le joueur.', 'Un travelling circulaire autour du joueur, avec raytracing et ombres.', 'Décris-moi la scène : qui est là, que se passe-t-il ?'];
 
@@ -34,6 +34,8 @@ export function createAI(S) {
       const acts = m.actions.length ? el('div', { class: 'ai-acts' }, ...m.actions.map(a => el('div', { class: 'ai-act' + (a.ok ? '' : ' ko'), text: a.text }))) : null;
       kids.push(el('div', { class: 'ai-msg bot' + (m.error ? ' err' : '') }, acts, m.text ? el('div', { class: 'ai-text', text: m.text }) : null, m.pending && m.note ? el('div', { class: 'ai-err', text: m.note }) : null, m.pending ? el('div', { class: 'ai-wait' }, el('i'), el('i'), el('i')) : null,
         m.error ? el('div', { class: 'ai-err', text: `⚠ ${m.error}` }) : null,
+        // (budget d'actions épuisé avant la conclusion : « Continuer » relance un tour qui reprend là où l'assistant s'est arrêté — sur le dernier message seulement)
+        !m.pending && m.more && i === chat.length - 1 ? el('button', { class: 'ai-back ai-more', title: 'L’assistant s’est arrêté faute de budget d’actions : il reprend là où il en était (problèmes du montage, plans signalés par la critique visuelle).', text: '▶ Continuer', onclick: () => send(CONTINUE) }) : null,
         !m.pending && m.changed ? el('button', { class: 'ai-back', title: 'Remet le projet (caméras, clés, apparences) et la conversation dans l’état d’avant ce message', text: '↩ Revenir à avant ce message', onclick: () => rollback(i - 1) }) : null));
     });
     const stick = host.scrollTop + host.clientHeight >= host.scrollHeight - 40;
@@ -49,7 +51,7 @@ export function createAI(S) {
     let res;
     try { res = await runTurn(S.host(), history, text, ask, ev => { if (ev.type === 'action') bot.actions.push({ ok: ev.ok, text: ev.text }); else if (ev.type === 'say') { bot.text = ev.text; bot.note = ''; } else if (ev.type === 'wait' || ev.type === 'check') bot.note = ev.text; render(); }); }
     catch (e) { console.error(e); res = { text: '', actions: bot.actions, changed: S.snapshot() !== user.snap, error: { text: String(e?.message || e) } }; }
-    bot.pending = false; bot.text = res.text || bot.text; bot.changed = res.changed || S.snapshot() !== user.snap;
+    bot.pending = false; bot.text = res.text || bot.text; bot.changed = res.changed || S.snapshot() !== user.snap; bot.more = !!res.more;
     if (res.error) { bot.error = res.error.text; if (res.error.vip === false) { S.account().vip = false; } if (!bot.actions.length) history.length = user.hLen; }
     busy = false; S.flush(); S.refresh(); render();
     if (res.error?.vip === false) { chat = []; history = []; render(); }

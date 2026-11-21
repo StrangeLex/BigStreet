@@ -350,6 +350,12 @@ console.log('  anim.tick :', (await tickMs()).toFixed(3), 'ms · interface enti�
     await ev(`document.querySelector('#export').click(), 1`); await wait(900); await shot('export.png');
     console.log('page Exporter :', JSON.stringify(await ev(`(() => { const g = document.querySelector('#xpGo'), r = g?.getBoundingClientRect(); return { ouverte: !!g && g.offsetParent !== null, boutonDansEcran: !!r && r.right <= innerWidth && r.bottom <= innerHeight, taille: [innerWidth, innerHeight] }; })()`)));
   }
+  if (STEPS.includes('fidelite')) {
+    // événements de fidélité des records (21/11) : couteau planté puis retiré, salle repeinte — en avant, puis en revenant en arrière
+    const st = t => ev(`(async () => { const S = __studio, w = S.world; S.seek(${t}); const n0 = S.state.images; for (let i = 0; i < 80 && S.state.images < n0 + 3; i++) await new Promise(r => setTimeout(r, 250)); return { T: Math.round(S.state.T), couteaux: [...(w.knifeFx?.planted?.keys() || [])], sol: w.room.floor, mur: w.room.wall }; })()`);
+    console.log('fidélité : à 1 s', JSON.stringify(await st(1000)), '| à 2,5 s', JSON.stringify(await st(2500)), '| à 4 s', JSON.stringify(await st(4000)), '| à 6 s', JSON.stringify(await st(6000)), '| retour à 2,5 s', JSON.stringify(await st(2500)), '| retour à 0,5 s', JSON.stringify(await st(500)));
+    await ev(`__studio.seek(2500), 1`); await drawn(4); await shot('fidelite-couteau.png');
+  }
   win.destroy();
 } catch (e) { console.error('ÉCHEC', e); code = 1; }
 clearTimeout(guard);

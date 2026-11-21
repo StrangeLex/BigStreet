@@ -216,6 +216,21 @@ const AI_EXT = [createGeoExt(), createMondeExt(), createAnimExt()];   // (create
 // (raytracing : jusqu'à 100 pour tous, jusqu'à 300 pour un compte VIP — le plafond est appliqué ici, à l'affichage)
 const rtCap = () => (account?.vip || account?.admin ? CAMS.RT_MAX : 1);
 const fxOf = (c, t) => { const F = fxAt(c, t); if (F.rt > rtCap()) F.rt = rtCap(); return F; };
+/**
+ * Une petite image JPEG (data:…) de la cinématique à l'instant t, rendue par le même chemin que l'export (image par image, filtres
+ * compris) — pour la critique visuelle de l'assistant (review_shots). La vue, l'instant et le mode reviennent ensuite à ce qu'ils étaient.
+ */
+async function snapShot(t, w = 480) {
+  if (!pb || !world || exporting || !cineRange(cams)) return null;
+  const keep = { T, mode, sel: selId, hold: frameHold }, pause = ms => new Promise(r => setTimeout(r, ms));
+  setPlaying(false); frameHold = true;
+  try {
+    xpHost.frame(t, true); await pause(50); xpHost.frame(t, false); await pause(30); xpHost.frame(t, false);   // (trois images : les personnages et leur pose sont en place à la troisième)
+    const cv = $('#view'), c = document.createElement('canvas'); c.width = w; c.height = Math.max(90, Math.round(w * cv.height / Math.max(1, cv.width)));
+    c.getContext('2d').drawImage(cv, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.6);
+  } catch (e) { console.warn('image du plan', e); return null; } finally { frameHold = keep.hold; T = keep.T; seekNext = true; setMode(keep.mode === 'cine' ? 'free' : keep.mode); }
+}
 const EV_NAMES = { chat: 'parole', act: 'geste', emote: 'émote', ragdoll: 'chute', shot: 'tir', stab: 'coup de couteau', kthrow: 'lancer de couteau', carry: 'porté', door: 'porte', alarm: 'alarme' };
 let refreshTimer = 0;
 /** L'« hôte » du moteur d'actions de l'assistant (ai-tools.js) : tout ce qu'il peut lire et faire dans le Studio */
@@ -228,6 +243,8 @@ const aiHost = () => ({
   posAt: (key, t) => (String(key).startsWith('o:') ? anim?.subjectPos(key, t) || null : scene.posOf(key, t)), isHidden: k => scene.isHidden(k), lookOf: (id, t) => scene.lookOf(id, t), lookOptions: (id, attr) => scene.lookOptions(id, attr),
   blocked: (x, z) => !!world.room && !world.room.outdoor && !world.isFloor(Math.round(x), Math.round(z)),
   ext: AI_EXT, geo: geoKit, rtMax: () => rtCap() * 100,
+  // (les yeux de l'assistant : snap rend une petite image d'un instant de la cinématique ; vision l'envoie au modèle qui voit, par le même relais que l'assistant)
+  snap: t => snapShot(t), vision: messages => api.ai({ messages, tools: [] }),
   aspect: () => ($('#view').clientWidth || 16) / ($('#view').clientHeight || 9),
   stateOf(id, t) { const u = scene.descAt(id, t); return u ? { etat: { stand: 'debout', sit: 'assis', lie: 'allongé', swim: 'nage' }[u.st] || u.st, ...(u.em ? { emote: u.em } : {}), ...(u.title ? { titre: u.title } : {}), ...(u.pv ? { dans_le_vehicule: u.pv[0] } : {}), ...(u.ko ? { ko: true } : {}), ...(u.dance ? { danse: true } : {}) } : null; },
   events: (t0, t1) => rec.events.filter(([t, m]) => t >= t0 && t <= t1 && EV_NAMES[m.t]).map(([t, m]) => ({ t, id: m.id, type: EV_NAMES[m.t], name: scene.byKey(`u:${m.id}`)?.name || '', text: m.text || m.a || m.e || '' })),

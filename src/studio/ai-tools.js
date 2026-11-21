@@ -51,14 +51,14 @@ export const SYSTEM_PROMPT = `Tu es l'assistant réalisateur de « Big Street St
 - UN PLAN = UNE CAMÉRA : sa première et sa dernière clé donnent son début et sa fin (deux clés même pour un plan fixe). À chaque instant, la caméra à l'antenne est celle dont les clés encadrent cet instant (la dernière commencée si plusieurs se chevauchent). Raccord : le plan suivant commence exactement où le précédent finit.
 - Crée la caméra AVANT de la régler, puis réutilise son nom exact.
 - Parent (set_parent) : les coordonnées deviennent relatives au parent, (0, 0, 0) = sa tête. follow : elle tourne avec lui (x = devant, z = à sa droite ; par-dessus l'épaule : x −1,2, y 0,3, z 0,5) ; look : elle le regarde toujours. set_keys : space "monde" (défaut) ou "parent".
-- Image : filter (nuit, thermique, nb, sepia, cine), vignette, grain, dof, raytracing, shadow. Look film : cine + vignette 20–35 + grain 8–15 ; rendu riche : raytracing 40–70 + shadow ; dof 30–60 isole un gros plan.
+- Image : filter (nuit, thermique, nb, sepia, cine), vignette, grain, dof, raytracing, shadow. Les filtres nuit (vision nocturne verte) et thermique MASQUENT les sujets : seulement si l'utilisateur les demande (« vision nocturne », « caméra de surveillance », « thermique »), jamais sur tout le montage. Look film : cine + vignette 20–35 + grain 8–15 ; rendu riche : raytracing 40–70 + shadow ; dof 30–60 isole un gros plan.
 
 # Règles de montage OBLIGATOIRES (le Studio les contrôle)
 - DURÉE : sauf demande contraire, filme le « passage_interessant » de l'état (là où le joueur se déplace, parle, agit) et non tout le record ; vise 15 à 40 s au total. Si l'utilisateur donne une durée (« 20 s »), tiens-la à 1 s près. Annonce la durée totale dans ta réponse.
 - Durée d'un plan selon l'action : ensemble 4–6 s, moyen 3–5 s, gros plan 1,5–3 s. Jamais moins de ${MIN_SHOT} s ; plus de 10 s seulement pour un travelling motivé (visite, suivi, vue subjective). N'étire JAMAIS un plan pour couvrir le reste du record : mieux vaut un montage court.
 - Variété : alterne les valeurs de plan (ensemble, demi-ensemble, moyen, américain, rapproché, gros plan) et change d'axe d'au moins 30° à chaque coupe ; jamais deux plans de même valeur ni deux plans larges de suite. Règle des 180° entre deux personnages. Sujet sur un tiers (thirds), de l'air devant son regard ou sa marche.
 - Récit : ouvre large (où sommes-nous), resserre (qui, quoi), finis sur une image forte. Cale les coupes sur les événements (list_events). Sujet qui se déplace : caméra attachée ou travelling, d'après sa trajectoire (entity_path), placée du côté où il va.
-- Styles : action = plans de 1,5 à 3 s, contre-plongées, ras du sol, grand-angle, léger roulis, travellings rapides et orbites ; horreur = lent, couloirs, vignette et grain, peu de lumière ; contemplatif = plans larges et longs, mouvements doux.
+- Styles : action = plans de 1,5 à 3 s, contre-plongées, ras du sol, grand-angle, léger roulis, travellings rapides et orbites ; horreur = lent, couloirs, contre-plongées, filter cine + vignette 30–45 + grain 12–20, peu de lumière — mais le sujet reste VISIBLE (pas de vision nocturne) ; contemplatif = plans larges et longs, mouvements doux.
 - Le joueur est LE sujet (au moins deux plans sur trois). Un PNJ n'a un plan que s'il interagit avec lui ou se trouve à moins de 5 m.
 - frame_shot : donne toujours subject, shot, side, height et t.
 - « Fais la suite » : repars de la fin du montage existant sans toucher aux plans déjà faits.
@@ -296,7 +296,7 @@ export function createEngine(H) {
         if (!local && 'x' in v && 'z' in v && !c.parent && H.blocked(v.x, v.z)) notes.push(`⚠ à ${fmtT(t)} la caméra semble dans un mur ou hors du lieu`);
         times.push(t);
       }
-      if (!n) return ko(`set_keys : aucune valeur posée${notes.length ? ` (${notes.join(' ; ')})` : ''}.`);
+      if (!n) return ko(`set_keys : aucune valeur posée${notes.length ? ` (${notes.join(' ; ')})` : ''} — une clé qui ne donne que « t » ne fait rien : donne au moins un paramètre (x, y, z, yaw, pitch, fov…) ; pour donner une durée à un plan, rappelle frame_shot à l’instant de fin.`);
       const S0 = Math.min(...times), S1 = Math.max(...times);
       return ok(`${born ? `Caméra « ${c.name} » créée ; ` : ''}${n} clé${n > 1 ? 's' : ''} posée${n > 1 ? 's' : ''} sur ${c.name} (${times.length > 1 ? `de ${fmtT(S0)} à ${fmtT(S1)}` : `à ${fmtT(S0)}`})${notes.length ? ` — ${notes.join(' ; ')}` : ''}.`, { camera: c.name, cles: n, ...(notes.length ? { remarques: notes } : {}) });
     },
@@ -518,8 +518,12 @@ export function refusedText(actions) {
   for (const [why, names] of by) { const t = `${[...names].join(', ')} — ${why}`; if (!seen.has(t)) { seen.add(t); L.push(t); } }
   return L.length ? `\n\n⚠ ${left.length > 1 ? `${left.length} actions ont été refusées par le Studio et n’ont PAS été faites` : 'Une action a été refusée par le Studio et n’a PAS été faite'} :\n${L.slice(0, 6).map(t => `• ${t}`).join('\n')}${L.length > 6 ? `\n• … et ${L.length - 6} autre${L.length > 7 ? 's' : ''}` : ''}` : '';
 }
-export async function runTurn(H, history, userText, ask, on = () => {}, maxRounds = 14, wait = ms => new Promise(r => setTimeout(r, ms))) {
-  const eng = createEngine(H), actions = [], old = new Set(H.cams.map(c => c.id)); let changed = false, text = '', error = null, checked = 0;
+/** Le budget d'allers-retours d'un tour selon la demande : 20 pour une cinématique entière, 14 sinon (une retouche, une question, « continue ») */
+export const roundsFor = text => (/cin[eé]matique|animation|film|montage|trailer|bande.annonce|d[eé]couverte|visite|pr[eé]sentation|s[eé]quence/i.test(String(text)) && !/^\s*continue/i.test(String(text)) ? 20 : 14);
+export const CONTINUE = 'Continue là où tu t’es arrêté : termine ce qui est en cours (problèmes du montage et plans signalés par la critique visuelle ci-dessus), sans refaire ce qui est déjà bon, puis conclus.';
+export async function runTurn(H, history, userText, ask, on = () => {}, maxRounds = null, wait = ms => new Promise(r => setTimeout(r, ms))) {
+  maxRounds ??= roundsFor(userText);
+  const eng = createEngine(H), actions = [], old = new Set(H.cams.map(c => c.id)); let changed = false, text = '', error = null, checked = 0, reviewed = false, visual = null;
   history.push({ role: 'user', content: `${userText}\n\n[État du Studio] ${digest(H)}` });
   eng.open(history);
   // (durée demandée par l'utilisateur — « 20 s », « 30 secondes », « 1 min » — : contrôlée avant d'accepter la conclusion)
@@ -527,14 +531,17 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
   // (jetons : les résultats d'outils et les états du Studio des échanges anciens sont abrégés — seuls les deux derniers échanges restent entiers)
   const lean = L => { let seen = 0; const cut = new Set(); for (let i = L.length - 1; i >= 0; i--) { if (L[i].role === 'assistant' && L[i].tool_calls) seen++; else if (seen >= 2 && ((L[i].role === 'tool' && L[i].content.length > 700) || (L[i].role === 'user' && i < L.length - 1 && /\n\n\[État du Studio\] /.test(L[i].content)))) cut.add(i); }
     return cut.size ? L.map((m, i) => (!cut.has(i) ? m : m.role === 'tool' ? { ...m, content: `${m.content.slice(0, 600)}… (résultat abrégé : rappelle l’outil pour le détail)` } : { ...m, content: m.content.split('\n\n[État du Studio] ')[0] })) : L; };
-  const run = calls => { const R = eng.batch(calls); R.forEach(r => { if (r.ok && eng.isMutating(r.name)) changed = true; const a = { ok: r.ok, text: r.text, name: r.name }; actions.push(a); on({ type: 'action', ...a }); }); return R; };
+  // (un outil peut rendre « later » — une fonction asynchrone : capture d'images, critique par un modèle qui voit… — : son vrai résultat est attendu ici)
+  const run = async calls => { const R = eng.batch(calls); for (const r of R) if (typeof r.later === 'function') { const f = r.later; delete r.later; on({ type: 'wait', text: r.text.replace(/^✓\s*/, '') }); try { const x = await f(); r.ok = !!x.ok; r.text = x.text; r.data = x.data || {}; } catch (e) { r.ok = false; r.text = `✗ ${r.name} : ${String(e?.message || e).slice(0, 160)}`; r.data = {}; } } R.forEach(r => { if (r.ok && eng.isMutating(r.name)) changed = true; const a = { ok: r.ok, text: r.text, name: r.name }; actions.push(a); on({ type: 'action', ...a }); }); return R; };
+  // (le site refuse plus de 120 messages : un long tour — des dizaines d'appels d'outils — garde sa demande de départ et ses 80 derniers messages, coupés au début d'un échange d'outils)
+  const fit = L => { if (L.length <= 100) return L; let k = L.length - 80; while (k < L.length && L[k].role !== 'assistant') k++; if (k >= L.length) return L.slice(-80); const head = L[0].role === 'user' ? [{ ...L[0], content: `${L[0].content}\n(Les premiers échanges de ce tour ne sont plus affichés : fie-toi à l’état du Studio et à cinematic_summary.)` }] : []; return [...head, ...L.slice(k)]; };
   for (let round = 0; round < maxRounds; round++) {
     // (contexte borné : le prompt, puis les échanges les plus récents — un échange d'outils n'est jamais coupé en deux)
     let from = Math.max(0, history.length - 60); while (from > 0 && history[from].role !== 'user') from--;
     // (site occupé — 429, « Doucement », « Trop de requêtes » — : on attend et on réessaie, jusqu'à trois fois)
     let res;
     for (let tries = 0; ; tries++) {
-      try { res = await ask({ messages: [{ role: 'system', content: eng.promptNow() }, ...lean(history.slice(from))], tools: eng.toolsNow() }); } catch (e) { res = { error: String(e?.message || e) }; }
+      try { res = await ask({ messages: [{ role: 'system', content: eng.promptNow() }, ...fit(lean(history.slice(from)))], tools: eng.toolsNow() }); } catch (e) { res = { error: String(e?.message || e) }; }
       const busy = res && !res.message && (res.status === 429 || /doucement|trop de requ|rate.?limit|déjà en cours/i.test(String(res.error || '')));
       if (!busy || tries >= 3) break;
       on({ type: 'wait', text: `Le site est occupé : nouvel essai dans ${[1.5, 3, 6][tries]} s…` }); await wait([1500, 3000, 6000][tries]);
@@ -545,14 +552,14 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
     if (calls.length) {
       history.push({ role: 'assistant', content: m.content || '', tool_calls: calls });
       if (m.content) { text = m.content; on({ type: 'say', text: m.content }); }
-      run(calls.map(c => ({ name: c.function.name, args: c.function.arguments }))).forEach((r, i) => history.push({ role: 'tool', tool_call_id: calls[i].id || `call_${actions.length}_${i}`, content: JSON.stringify({ ok: r.ok, message: r.text, ...r.data }).slice(0, 14000) }));
+      (await run(calls.map(c => ({ name: c.function.name, args: c.function.arguments })))).forEach((r, i) => history.push({ role: 'tool', tool_call_id: calls[i].id || `call_${actions.length}_${i}`, content: JSON.stringify({ ok: r.ok, message: r.text, ...r.data }).slice(0, 14000) }));
       continue;
     }
     const alt = parseTextActions(m.content);
     if (alt?.calls.length) {
       history.push({ role: 'assistant', content: m.content });
       if (alt.message) { text = alt.message; on({ type: 'say', text: alt.message }); }
-      const out = run(alt.calls).map(r => ({ outil: r.name, ok: r.ok, message: r.text, ...r.data }));
+      const out = (await run(alt.calls)).map(r => ({ outil: r.name, ok: r.ok, message: r.text, ...r.data }));
       history.push({ role: 'user', content: `[Résultats des outils] ${JSON.stringify(out).slice(0, 20000)}\nContinue (d'autres actions en JSON), ou conclus par une réponse en clair sans JSON.` });
       continue;
     }
@@ -566,6 +573,7 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
       on({ type: 'check', text: 'Vérification : aucune caméra — l’assistant doit créer les plans…' }); continue;
     }
     if (rc && !want && rc.plans.length && H.dur >= 15000) { const R0 = H.C.cineRange(H.cams), got = R0 ? (R0[1] - R0[0]) / 1000 : 0; if (got < 8 && !old.size) rc.problems.push(`cinématique trop courte (${r1(got)} s) : vise 15 à 40 s — ajoute des plans de 2 à 6 s à la suite (chaque plan a une clé de début et une clé de fin)`); }
+    if (rc && rc.plans.length && !/nocturne|vision de nuit|thermique|infrarouge|surveillance|night|cam[eé]ra de s[eé]curit[eé]/i.test(String(userText))) { const veil = H.cams.filter(c => c.on && !old.has(c.id) && (c.filter === 'nuit' || c.filter === 'thermique') && rc.plans.some(p => p.camera === c.name)).map(c => c.name); if (veil.length) rc.problems.push(`filtre ${veil.length > 1 ? 'vision nocturne / thermique sur les plans' : 'vision nocturne / thermique sur le plan'} ${veil.map(n => `« ${n} »`).join(', ')} : il masque les sujets et personne ne l’a demandé — retire-le (update_camera avec filter vide ou cine) ; pour une ambiance sombre : filter cine, vignette, grain, éclairage`); }
     if (rc && want && rc.plans.length) { const R0 = H.C.cineRange(H.cams), got = R0 ? (R0[1] - R0[0]) / 1000 : 0; if (Math.abs(got - want) > Math.max(1.5, want * 0.08)) rc.problems.push(`durée demandée : ${want} s — le montage fait ${r1(got)} s : ${got > want ? 'supprime ou raccourcis des plans' : 'ajoute des plans courts'} pour arriver à ${want} s (à 1 s près)${got > want ? ` — le plus simple : fit_duration avec seconds = ${want}` : ''}`); }
     if (rc?.problems.length && checked < 2 && round < maxRounds - 1) {
       checked++; history.push({ role: 'assistant', content: text });
@@ -573,12 +581,32 @@ export async function runTurn(H, history, userText, ask, on = () => {}, maxRound
       on({ type: 'check', text: `Vérification du montage : ${rc.problems.length} défaut${rc.problems.length > 1 ? 's' : ''} à corriger…` });
       continue;
     }
+    // (des YEUX : avant d'accepter la conclusion, les plans sont rendus en petites images et critiqués par un modèle qui voit — une fois par tour ; s'il y a des plans à reprendre, l'assistant les corrige)
+    if (changed && !reviewed && rc?.plans.length && round < maxRounds - 2) {
+      reviewed = true; let rv = null; on({ type: 'check', text: 'Critique visuelle des plans (images)…' });
+      for (const x of eng.ext) if (x.review) { try { rv = await x.review(userText); } catch (e) { console.warn('critique visuelle', e); } if (rv) break; }
+      if (rv?.fix) { history.push({ role: 'assistant', content: text }); history.push({ role: 'user', content: `[Critique visuelle du Studio] Un modèle qui VOIT les images a regardé les plans :\n${rv.text}\nReprends seulement les plans signalés (free_spots pour une position d’où le sujet est visible, frame_shot avec un autre côté, une autre hauteur ou une autre distance), sans toucher aux plans corrects, puis appelle cinematic_summary et donne ton résumé final.` }); visual = rv; continue; }
+      visual = rv;
+    }
+    if (visual?.fix && !visual.again && round < maxRounds - 1) {   // (après les corrections : les plans sont revus une fois, pour dire ce qu'il en est vraiment)
+      on({ type: 'check', text: 'Critique visuelle : nouveau regard après correction…' }); let rv2 = null;
+      for (const x of eng.ext) if (x.review) { try { rv2 = await x.review(userText); } catch (e) { console.warn('critique visuelle', e); } if (rv2) break; }
+      visual = { ...visual, again: rv2 || { flagged: null } };
+    }
+    const autoTxt = v => (v?.auto ? ` ; ${v.auto.n} recadré${v.auto.n > 1 ? 's' : ''} par le moteur (${v.auto.names})${v.auto.after === null ? '' : ` → ${v.auto.after} encore signalé${v.auto.after > 1 ? 's' : ''}`}` : '');
+    if (visual) text += `\n\nCritique visuelle (un modèle qui voit les images) : ${visual.flagged} plan${visual.flagged > 1 ? 's' : ''} signalé${visual.flagged > 1 ? 's' : ''} sur ${visual.total}${autoTxt(visual)}${visual.again ? (visual.again.flagged === null ? ' ; correction non revue' : ` avant correction, ${visual.again.flagged} sur ${visual.again.total} après${visual.again.flagged ? ` (${visual.again.short})` : ''}`) : visual.fix ? ` (${visual.short})` : visual.auto ? '' : ' — rien à reprendre'}.`;
     // (le résumé du modèle est suivi du montage réel : ce que l'utilisateur lit correspond toujours à ce qui existe)
     if (rc?.text) text += `\n\n${rc.text}${rc.problems.length ? `\n⚠ ${rc.problems.join('\n⚠ ')}` : ''}`;
     text += refusedText(actions);
     history.push({ role: 'assistant', content: text }); on({ type: 'say', text, final: true });
     return { text, actions, changed, error: null, recap: rc };
   }
-  if (!error) { const rc = changed ? eng.recap(old) : null; text = `${text || 'J’ai fait une première série d’actions ; dis-moi si je continue.'}${rc?.text ? `\n\n${rc.text}` : ''}${refusedText(actions)}`; history.push({ role: 'assistant', content: text }); }
-  return { text, actions, changed, error };
+  if (!error) {
+    const rc = changed ? eng.recap(old) : null; let eyes = '';
+    // (allers-retours épuisés avant la conclusion : les plans sont quand même regardés une fois, pour dire ce qu'on y voit — la critique sert au message suivant)
+    if (changed && !reviewed && rc?.plans.length) { on({ type: 'check', text: 'Critique visuelle des plans (images)…' }); for (const x of eng.ext) if (x.review) { try { visual = await x.review(userText); } catch (e) { console.warn('critique visuelle', e); } if (visual) break; } }
+    if (visual && !visual.again) eyes = `\n\nCritique visuelle (un modèle qui voit les images) : ${visual.flagged} plan${visual.flagged > 1 ? 's' : ''} signalé${visual.flagged > 1 ? 's' : ''} sur ${visual.total}${visual.auto ? ` ; ${visual.auto.n} recadré${visual.auto.n > 1 ? 's' : ''} par le moteur (${visual.auto.names})${visual.auto.after === null ? '' : ` → ${visual.auto.after} encore signalé${visual.auto.after > 1 ? 's' : ''}`}` : ''}${visual.fix ? ` (${visual.short}) :\n${visual.text}\n« Continuer » pour que je les reprenne.` : ' — rien à reprendre.'}`;
+    text = `${text || 'J’ai fait une première série d’actions.'}\n(Budget d’actions de ce message épuisé (${maxRounds} allers-retours) avant ma conclusion : « Continuer » reprend là où je me suis arrêté.)${rc?.text ? `\n\n${rc.text}` : ''}${eyes}${refusedText(actions)}`; history.push({ role: 'assistant', content: text });
+  }
+  return { text, actions, changed, error, more: !error };   // (more : le tour s'est arrêté faute de budget — le fil propose « Continuer »)
 }
