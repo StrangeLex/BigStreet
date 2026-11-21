@@ -746,7 +746,7 @@ function serveLocalAssets(session) {
 
 // ------------------------------------------------------------------ Studio
 // Records du jeu (pont « __bsStudio » de la fenetre de jeu) et fenetre « Big Street Studio » : cf. studio-main.js
-const studio = require('./studio-main.js')({ SITE, log, getGame: () => game, getLauncher: () => launcher, installDir, readManifest, safeDest });
+const studio = require('./studio-main.js')({ SITE, log, getGame: () => game, getLauncher: () => launcher, installDir, readManifest, safeDest, getToken: () => readSettings().token });
 
 // ------------------------------------------------------------------- Ponts
 ipcMain.handle('bs:minimize', () => { (game || launcher)?.minimize(); });

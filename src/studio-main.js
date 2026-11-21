@@ -9,6 +9,9 @@
  *     réseau : tout ce qu'elle demande passe par le relais ci-dessous, qui ne sert que l'interface du Studio (src/studio),
  *     les records, et une copie locale du moteur de rendu du jeu (scripts d'affichage, modèles, plan de la ville) —
  *     prise sur le site quand il répond, relue sur le disque sinon. Le Studio fonctionne donc hors ligne.
+ *  3. Le compte et l'assistant IA : la page du Studio n'a ni réseau ni jeton de session. C'est ce processus qui demande au site
+ *     qui est connecté (pseudo, admin, VIP, skins possédés — gardés en copie pour le hors-ligne) et qui relaie les échanges de
+ *     l'assistant vers POST /api/studio/ai (réservé aux comptes VIP par le site). Le jeton ne passe jamais dans la page.
  */
 const { app, BrowserWindow, ipcMain, shell, session, dialog } = require('electron');
 const path = require('node:path');
@@ -23,7 +26,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const MIRROR = /^\/(js|vendor|models|data|css|fonts|img|lootbox)\/[A-Za-z0-9._\-/@+]+$/;
 const CSP = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; worker-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
 
-module.exports = function setupStudio({ SITE, log, getGame, getLauncher, installDir, readManifest, safeDest }) {
+module.exports = function setupStudio({ SITE, log, getGame, getLauncher, installDir, readManifest, safeDest, getToken = () => '' }) {
   // ------------------------------------------------------------ Dossiers
   let dirCache = null;
   /** Dossier des records : Documents/Big Street/Studio (à défaut, le dossier de l'application). */
@@ -214,5 +217,52 @@ module.exports = function setupStudio({ SITE, log, getGame, getLauncher, install
   });
   ipcMain.handle('bs:studio-export-end', guard(async () => { const file = await exportEnd(); if (file) shell.showItemInFolder(file); return { ok: !!file, file: file ? path.basename(file) : null }; }));
 
-  return { openStudio, watchGame, serveStudio, recordsDir, recClose, get window() { return studio; } };
+  // ------------------------------------------------------------ 3. Compte (skins possédés, VIP) et assistant IA
+  const accountFile = () => path.join(process.env.BS_STUDIO_CACHE || app.getPath('userData'), 'studio-account.json');
+  const site = async (route, { method = 'GET', body, timeout = 12000 } = {}) => {
+    const token = getToken(); if (!token) return { status: 401, json: null };
+    const r = await fetch(`${SITE}/api/${route}`, { method, signal: AbortSignal.timeout(timeout),
+      headers: { Accept: 'application/json', Authorization: `Bearer ${token}`, ...(method !== 'GET' ? { Origin: SITE, 'Content-Type': 'application/json' } : {}) }, body: body ? JSON.stringify(body) : undefined });
+    let json = null; try { json = await r.json(); } catch { /* réponse vide */ }
+    return { status: r.status, json };
+  };
+  const cleanAccount = (a, online) => ({ name: String(a.name || '').slice(0, 32), admin: !!a.admin, vip: !!(a.vip || a.admin), vipUntil: +a.vipUntil || 0,
+    owned: Array.isArray(a.owned) ? a.owned.filter(k => typeof k === 'string' && k.length < 80).slice(0, 5000) : [], online, at: online ? Date.now() : +a.at || 0 });
+  /** Le compte connecté au launcher : { name, admin, vip, owned, online } — demandé au site, sinon la dernière copie ; null : personne */
+  async function studioAccount() {
+    if (process.env.BS_STUDIO_ACCOUNT) { try { return cleanAccount(JSON.parse(process.env.BS_STUDIO_ACCOUNT), true); } catch { return null; } }   // (essais)
+    if (!getToken()) return null;
+    if (!process.env.BS_STUDIO_OFFLINE) {
+      for (const route of ['me', 'studio/me']) {
+        try {
+          const r = await site(route); const a = r.json?.account || (r.json?.name ? r.json : null);
+          if (r.status === 200 && r.json && 'account' in r.json && !r.json.account) return null;   // (session refusée par le site)
+          if (a?.name) { const acc = cleanAccount(a, true); try { fs.mkdirSync(path.dirname(accountFile()), { recursive: true }); fs.writeFileSync(accountFile(), JSON.stringify(acc)); } catch { /* tant pis */ } return acc; }
+        } catch { break; }   // (site injoignable : la copie)
+      }
+    }
+    try { return cleanAccount(JSON.parse(fs.readFileSync(accountFile(), 'utf8')), false); } catch { return null; }
+  }
+  ipcMain.handle('bs:studio-account', guard(studioAccount));
+  // (l'assistant : un échange à la fois, corps borné ; le site vérifie le VIP, le débit et choisit le modèle)
+  let aiBusy = false;
+  ipcMain.handle('bs:studio-ai', async (e, body) => {
+    if (!fromStudio(e)) return { error: 'refusé' };
+    if (!getToken()) return { error: 'Connecte-toi dans le launcher pour utiliser l’assistant.', login: true };
+    if (aiBusy) return { error: 'Une demande est déjà en cours.' };
+    let json; try { json = JSON.stringify(body); } catch { return { error: 'Demande illisible.' }; }
+    if (!body || typeof body !== 'object' || !Array.isArray(body.messages) || json.length > 400000) return { error: 'Demande trop longue : commence une nouvelle conversation.' };
+    aiBusy = true;
+    try {
+      const r = await site('studio/ai', { method: 'POST', body: { messages: body.messages, tools: Array.isArray(body.tools) ? body.tools : undefined }, timeout: 90000 });
+      if (r.status === 403 && r.json?.vip === false) return { error: r.json.error || 'Fonctionnalité Studio VIP', vip: false };
+      if (r.status === 404) return { error: 'L’assistant n’est pas encore disponible sur le site.' };
+      if (!r.json) return { error: `Le site n’a pas répondu (${r.status}).` };
+      return r.json;
+    } catch (err) { log.info('studio : assistant : ' + err); return { error: /timeout|aborted/i.test(String(err)) ? 'L’assistant met trop de temps à répondre : réessaie.' : 'Site injoignable : l’assistant a besoin d’Internet.' }; }
+    finally { aiBusy = false; }
+  });
+  ipcMain.handle('bs:studio-shop', guard(() => { shell.openExternal(`${SITE}/?boutique=vip`); return { ok: true }; }));
+
+  return { openStudio, watchGame, serveStudio, recordsDir, recClose, studioAccount, get window() { return studio; } };
 };

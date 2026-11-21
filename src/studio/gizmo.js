@@ -1,8 +1,10 @@
 // Big Street Studio — les caméras dans la scène, comme dans un logiciel 3D : chaque caméra posée est dessinée (pyramide de
 // champ, cadre, triangle « haut », son nom au-dessus), se sélectionne au clic, et la caméra sélectionnée porte une poignée de
 // déplacement (flèches X rouge, Y vert, Z bleu, et plans) ou de rotation (anneaux). Les poignées sont celles de Three.js
-// (TransformControls, pris sur le site par le relais comme le reste du moteur) ; si elles manquent (hors ligne, jamais mises
-// en copie), les raccourcis G / R et les champs du panneau restent utilisables.
+// (TransformControls), embarquées dans le launcher (tcontrols.js, fabriqué par tools/vendor-tcontrols.mjs) : elles ne dépendent
+// ni du site ni de la copie locale du moteur, et marchent hors ligne.
+import { makeTransformControls } from '/__studio/tcontrols.js';
+
 export async function createGizmos(THREE, world, canvas, overlay, cb) {
   const helpers = new Map();   // id → { group, frame, mats, pick, label, fov, color }
   const tmpCam = new THREE.PerspectiveCamera(), v = new THREE.Vector3(), ray = new THREE.Raycaster();
@@ -52,12 +54,16 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
   }
 
   // Poignées de déplacement et de rotation
-  let tc = null, tcHelper = null, proxy = new THREE.Object3D(), attached = null, lastYaw = 0, mode = 'translate';
+  let tc = null, tcHelper = null, proxy = new THREE.Object3D(), attached = null, lastYaw = 0, mode = 'translate', enabled = true, veiled = false;
   world.scene.add(proxy);
   try {
-    const { TransformControls } = await import('/vendor/three-addons/controls/TransformControls.js');
+    const { TransformControls } = makeTransformControls(THREE);
     tc = new TransformControls(world.camera, canvas);
-    tc.setSize(0.85); tc.setSpace('world');
+    tc.setSize(1.3); tc.setSpace('world');
+    // (LA cause des flèches qu'on voyait sans pouvoir les saisir : le moteur du jeu ne recalcule plus la place des objets invisibles
+    // — game.js, Object3D.updateMatrixWorld — ; or les zones de saisie des poignées sont des objets invisibles : elles restaient à
+    // l'origine du monde et le pointeur ne les touchait jamais. Elles deviennent « visibles » avec un matériau qui ne se dessine pas.)
+    for (const g of Object.values(tc._gizmo?.picker || {})) { g.visible = true; g.traverse(o => { if (o.material) o.material.visible = false; }); }
     tcHelper = tc.getHelper ? tc.getHelper() : tc; world.scene.add(tcHelper);
     tc.addEventListener('dragging-changed', e => cb.drag?.(!!e.value));
     tc.addEventListener('objectChange', () => {
@@ -68,10 +74,22 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
   } catch (e) { console.warn('poignées indisponibles', e); tc = null; }
 
   const G = {
-    quatOf, anglesOf, hasHandles: !!tc,
+    quatOf, anglesOf, hasHandles: !!tc, get tc() { return tc; },
     get dragging() { return !!tc?.dragging; },
     /** le pointeur est-il sur une poignée ? (le clic lui revient alors, pas à la prise de la caméra libre) */
-    get hover() { return !!tc && !!attached && tcHelper.visible && tc.axis !== null; },
+    get hover() { return !!tc && enabled && !!attached && tcHelper.visible && tc.axis !== null; },
+    /** Poignées utilisables ou non (pointeur pris par la caméra libre : elles ne doivent pas réagir à un pointeur figé) */
+    setEnabled(on) { enabled = !!on; if (tc) { tc.enabled = enabled && !!attached; if (!enabled) tc.axis = null; } },
+    /** Cache (ou remet) tout ce que ce module dessine dans la scène — le temps de calculer l'aperçu d'une caméra */
+    veil(on) {
+      if (on === veiled) return; veiled = on;
+      if (on) { G._vis = [...helpers.values()].map(h => [h.group, h.group.visible]); G._tcv = tcHelper ? tcHelper.visible : false; for (const [g] of G._vis) g.visible = false; if (tcHelper) tcHelper.visible = false; }
+      else { for (const [g, v] of G._vis || []) g.visible = v; if (tcHelper) tcHelper.visible = G._tcv; }
+    },
+    /** Un point du monde est-il devant la vue et dans l'image ? rend aussi sa distance : { on, dist } */
+    seen(x, y, z) { const c = world.camera; v.set(x, y, z); const dist = v.distanceTo(c.position); v.project(c); return { on: v.z < 1 && Math.abs(v.x) < 0.92 && Math.abs(v.y) < 0.88, dist }; },
+    /** Position à l'écran (pixels de la fenêtre) d'un point du monde — essais automatiques */
+    screen(x, y, z) { const r = canvas.getBoundingClientRect(); v.set(x, y, z).project(world.camera); return { x: r.left + (v.x + 1) / 2 * r.width, y: r.top + (1 - v.y) / 2 * r.height, front: v.z < 1 }; },
     get mode() { return mode; },
     setMode(m) { mode = m === 'rotate' ? 'rotate' : 'translate'; if (tc) { tc.setMode(mode); tc.setSpace(mode === 'rotate' ? 'local' : 'world'); } },
     /**
@@ -103,7 +121,7 @@ export async function createGizmos(THREE, world, canvas, overlay, cb) {
         tc.camera = cam;
         if (s && !tc.dragging) { proxy.position.set(s.pose.x, s.pose.y, s.pose.z); quatOf(s.pose, proxy.quaternion); lastYaw = s.pose.yaw; proxy.updateMatrixWorld(); }
         if (s && tc.object !== proxy) tc.attach(proxy); else if (!s && tc.object) tc.detach();
-        tcHelper.visible = !!s; tc.enabled = !!s;
+        tcHelper.visible = !!s; tc.enabled = !!s && enabled;
       }
     },
     /** La caméra sous le pointeur (id), ou null */

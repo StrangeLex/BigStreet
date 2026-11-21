@@ -145,6 +145,18 @@ Rien ne s'enregistre tant que tu ne l'as pas demandé.
   dans `%APPDATA%\Big Street\studio-cache` : le Studio marche ensuite hors
   ligne (il s'ouvre aussi depuis l'icône près de l'horloge, sans connexion).
   Les modèles déjà installés (« Installer le jeu ») sont réutilisés.
+- Deux choses passent quand même par le site, **faites par le launcher et non
+  par cette fenêtre** (elle ne reçoit jamais ton jeton de session) :
+  le Studio demande qui est connecté (`GET /api/me` : pseudo, administrateur,
+  VIP, liste des skins possédés — gardée en copie dans
+  `%APPDATA%\Big Street\studio-account.json` pour le hors-ligne), afin de ne
+  proposer dans le panneau d'apparence que tes propres skins ; et, si tu es
+  VIP et que tu écris à l'**assistant IA**, tes messages et la description de
+  la scène (positions, noms des personnages, caméras) sont envoyés à
+  `POST /api/studio/ai`, que le site relaie à un modèle de langage. Rien n'est
+  envoyé tant que tu n'écris pas à l'assistant.
+- Les poignées de déplacement des caméras sont une copie de `TransformControls`
+  de three.js (licence MIT), embarquée dans `src/studio/tcontrols.js`.
 - Supprimer un record depuis le Studio supprime son fichier (et son projet),
   après confirmation. Tu peux aussi vider le dossier toi-même.
 

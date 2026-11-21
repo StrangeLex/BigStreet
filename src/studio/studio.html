@@ -17,7 +17,23 @@
           <button class="ib" id="folder" title="Ouvrir le dossier des records">📂</button>
         </div>
       </header>
-      <div id="recList" class="rec-list"></div>
+      <nav id="tabs">
+        <button data-tab="recs" class="on" title="Les records enregistrés en jeu">📼 Records</button>
+        <button data-tab="scene" title="Tout ce que contient le record : caméras, joueurs, PNJ, véhicules, objets">🌳 Scène</button>
+        <button data-tab="ai" title="Assistant réalisateur (Studio VIP)">✨ IA</button>
+      </nav>
+      <div class="tab" id="tabRecs"><div id="recList" class="rec-list"></div></div>
+      <div class="tab" id="tabScene" hidden>
+        <input id="sceneSearch" placeholder="Rechercher une entité…" spellcheck="false" title="Nom, pseudo, type d’objet ou numéro">
+        <div id="sceneTree" class="rec-list"></div>
+      </div>
+      <div class="tab" id="tabAi" hidden>
+        <div id="aiBody"></div>
+        <div id="aiForm" hidden>
+          <textarea id="aiInput" rows="3" placeholder="Décris la cinématique que tu veux… (Entrée : envoyer, Maj+Entrée : à la ligne)" spellcheck="false"></textarea>
+          <div class="ai-row"><button class="btn small" id="aiClear" title="Vider le fil (le projet ne change pas)" hidden>Nouvelle conversation</button><span class="grow"></span><button class="btn accent small" id="aiSend">Envoyer</button></div>
+        </div>
+      </div>
       <footer id="sideFoot"></footer>
     </aside>
 
@@ -57,29 +73,33 @@
           <table>
             <tr><td>Clic sur la vue</td><td>prendre la caméra (Échap pour la lâcher)</td></tr>
             <tr><td>Z Q S D / W A S D</td><td>avancer, reculer, aller de côté</td></tr>
-            <tr><td>Espace · Ctrl ou C</td><td>monter · descendre</td></tr>
+            <tr><td>Espace · C</td><td>monter · descendre</td></tr>
             <tr><td>Maj · Molette</td><td>aller vite · régler la vitesse</td></tr>
             <tr><td>Clic droit maintenu</td><td>tourner la vue sans prendre la caméra</td></tr>
             <tr><td>Espace (caméra lâchée)</td><td>lecture / pause</td></tr>
             <tr><td>← →</td><td>reculer / avancer de 2 s</td></tr>
             <tr><td>Maj+K · K</td><td>nouvelle caméra · image-clé de la caméra sélectionnée</td></tr>
-            <tr><td>Clic sur une caméra</td><td>la sélectionner (poignées de déplacement)</td></tr>
-            <tr><td>G · R</td><td>déplacer · tourner la caméra (X, Y, Z : contraindre ; clic : valider ; Échap : annuler)</td></tr>
+            <tr><td>Clic sur une caméra</td><td>la sélectionner : ses flèches apparaissent, à glisser à la souris</td></tr>
+            <tr><td>R · L</td><td>poignées de rotation (anneaux) · retour aux flèches de déplacement</td></tr>
+            <tr><td>G</td><td>déplacer la caméra à la souris (X, Y, Z : contraindre ; clic : valider ; Échap : annuler)</td></tr>
+            <tr><td>F · double-clic</td><td>cadrer la caméra ou l’entité sélectionnée</td></tr>
             <tr><td>0</td><td>vue à travers la caméra sélectionnée</td></tr>
-            <tr><td>Suppr</td><td>supprimer la clé sélectionnée</td></tr>
+            <tr><td>Suppr</td><td>supprimer la clé sélectionnée — sinon la caméra sélectionnée</td></tr>
+            <tr><td>Ctrl+Z · Ctrl+Y</td><td>annuler · rétablir (Ctrl+S : enregistrer, Ctrl+D : dupliquer la caméra)</td></tr>
+            <tr><td>Glisser une clé</td><td>aimantée à la tête de lecture, aux autres clés, à la seconde (Alt : libre)</td></tr>
             <tr><td>P</td><td>prévisualiser la cinématique</td></tr>
             <tr><td>J · V · N · Tab</td><td>aller au joueur · vue du joueur · pseudos · liste</td></tr>
           </table>
         </div>
         <div id="props" class="panel" hidden>
           <div class="p-title"><i id="pDot"></i><input id="pName" class="p-name" maxlength="40" title="Nom de la caméra" spellcheck="false"><input type="color" id="pColor" title="Couleur de la caméra"></div>
-          <label class="row"><input type="checkbox" id="pOn"> Active dans la cinématique</label>
-          <h4>Position et orientation <small id="pWhen" class="muted"></small></h4>
+          <button class="btn small keyall" id="pKeyAll" title="Pose une image-clé sur TOUS les paramètres de la caméra à l’instant courant (position, angles, FOV, filtres, raytracing) — ou les retire si elles y sont déjà. Pour écarter la caméra de la cinématique : le rond ● de sa piste, en bas.">◆ Clé sur tous les paramètres</button>
+          <h4>Position et orientation <small id="pRel" class="p-rel"></small> <small id="pWhen" class="muted"></small></h4>
           <div class="p-grid">
             <label><span class="drag ax-x" data-f="pX" data-s="0.05">X</span><input type="number" id="pX" step="0.1"></label>
             <label><span class="drag ax-y" data-f="pY" data-s="0.05">Y</span><input type="number" id="pY" step="0.1"></label>
             <label><span class="drag ax-z" data-f="pZ" data-s="0.05">Z</span><input type="number" id="pZ" step="0.1"></label>
-            <label><span class="drag" data-f="pYaw" data-s="0.5">Lacet °</span><input type="number" id="pYaw" step="1"></label>
+            <label><span class="drag" id="pYawL" data-f="pYaw" data-s="0.5">Lacet °</span><input type="number" id="pYaw" step="1"></label>
             <label><span class="drag" data-f="pPitch" data-s="0.5">Tangage °</span><input type="number" id="pPitch" step="1" min="-89" max="89"></label>
             <label><span class="drag" data-f="pRoll" data-s="0.5">Roulis °</span><input type="number" id="pRoll" step="1"></label>
             <label><span class="drag" data-f="pFov" data-s="0.25">FOV °</span><input type="number" id="pFov" step="1" min="5" max="130"></label>
@@ -101,8 +121,13 @@
           <label>Vignette <b id="pVignetteV"></b><input type="range" id="pVignette" min="0" max="1" step="0.05"></label>
           <label>Grain <b id="pGrainV"></b><input type="range" id="pGrain" min="0" max="1" step="0.05"></label>
           <label>Flou de profondeur <b id="pDofV"></b><input type="range" id="pDof" min="0" max="1" step="0.05"></label>
+          <h4>Lumière</h4>
+          <label title="0 : rendu normal. Jusqu’à 100 : occlusion ambiante fine (les creux et les contacts s’assombrissent), halo des lumières, reflets du sol mouillé, contraste — dosés selon la valeur. Animable par images-clés.">Raytracing <b id="pRtV"></b><input type="range" id="pRt" min="0" max="1" step="0.01"></label>
+          <label class="row" title="Ombres portées en temps réel dans la vue de cette caméra (soleil, lune ou éclairage de la pièce)"><input type="checkbox" id="pShadow"> Ombre</label>
           <div class="p-btns"><button class="btn small" id="pView">🎥 Vue caméra</button><button class="btn small" id="pDup" title="Dupliquer cette caméra">Dupliquer</button><button class="btn small danger" id="pDelCam">🗑 Supprimer la caméra</button></div>
         </div>
+        <div id="entPanel" class="panel" hidden></div>
+        <div id="pip" hidden title="Ce que voit la caméra sélectionnée à cet instant — clic : regarder à travers elle"><canvas id="pipCv" width="320" height="180"></canvas><span id="pipName"></span></div>
         <div id="modal" hidden></div>
         <div id="hint" hidden></div>
         <div id="recDot" hidden><i></i> EXPORT</div>
@@ -120,8 +145,8 @@
           <span class="sep"></span>
           <button class="btn accent" id="addCam" title="Poser une nouvelle caméra ici, à cet instant (Maj+K)">＋ Caméra</button>
           <button class="btn" id="addKey" title="Poser une image-clé de la caméra sélectionnée à cet instant, d’après la vue actuelle (K)">◆ Clé</button>
-          <button class="btn" id="gMove" title="Déplacer la caméra sélectionnée (G, puis X / Y / Z pour contraindre)">✥ Déplacer</button>
-          <button class="btn" id="gRot" title="Tourner la caméra sélectionnée (R, puis X / Y / Z)">⟳ Tourner</button>
+          <button class="btn" id="gMove" title="Poignées de déplacement : glisser les flèches de la caméra sélectionnée (L) — G : la déplacer à la souris">✥ Déplacer</button>
+          <button class="btn" id="gRot" title="Poignées de rotation : glisser les anneaux de la caméra sélectionnée (R)">⟳ Tourner</button>
           <button class="btn" id="camView" title="Regarder à travers la caméra sélectionnée (0) — Échap ou un déplacement pour revenir en caméra libre">🎥 Vue caméra</button>
           <span class="grow"></span>
           <button class="btn" id="preview" title="Prévisualiser la cinématique : les caméras actives s’enchaînent (P)">🎬 Prévisualiser</button>
