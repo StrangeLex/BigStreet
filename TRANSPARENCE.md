@@ -180,6 +180,21 @@ Rien ne s'enregistre tant que tu ne l'as pas demandé.
 - Supprimer un record depuis le Studio supprime son fichier (et son projet),
   après confirmation. Tu peux aussi vider le dossier toi-même.
 
+## Console développeur (F10)
+
+- F10 dans le jeu ouvre une fenêtre « Console » à part (F10 la referme). Sa taille, sa
+  position et les dernières commandes tapées sont gardées dans `console.json`, dans le
+  dossier de réglages du launcher ; le journal, lui, n'est gardé qu'en mémoire.
+- Le journal montre les messages du jeu, les erreurs et avertissements JavaScript de la
+  page, les connexions et changements de salle. Il ne quitte jamais ton PC : « Copier »
+  le met seulement dans ton presse-papiers.
+- La page du jeu n'a qu'un pont étroit vers la console (`window.__bsConsole`) : écrire
+  une ligne, publier ses chiffres, déclarer ses commandes, recevoir une commande tapée.
+  Rien sur le disque, rien sur le réseau.
+- `screenshot` enregistre une capture du jeu dans Images/Big Street. Les commandes
+  d'administration sont envoyées au serveur, qui vérifie tes droits comme pour le chat :
+  la console n'en donne aucun.
+
 ## Le jeu n'est pas dans le launcher
 
 Le launcher pèse ~78 Mo mais **ne contient pas le jeu** : c'est le poids

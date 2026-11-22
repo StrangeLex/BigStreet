@@ -17,6 +17,7 @@
  *     coordonnées relatives au parent, clé sur tous les paramètres, aimantation, suppression d'une caméra)
  *  9. Studio : panneau « Scène » (arbre des entités, recherche), droits d'apparence selon les skins du compte
  * 10. Studio : moteur d'actions de l'assistant IA, piloté par un faux modèle (outils, cadrages, restauration)
+ * 11. Console F10 : page sans script ni HTML injecté, ouverture / fermeture par F10, pont étroit côté jeu
  *
  * Le test écrit dans un dossier temporaire et le supprime à la fin ; il ne
  * touche ni aux réglages du joueur, ni au dossier d'installation réel.
@@ -53,6 +54,12 @@ function checkMarkup() {
   const byId = [...new Set([...sJs.matchAll(/getElementById\('([A-Za-z0-9_-]+)'\)/g)].map(m => m[1]))].filter(i => !sIn.has(i));
   ok('identifiants du Studio (par nom)', byId.length === 0, byId.join(', '));
   ok('Studio : ni gestionnaire ni script en dur (CSP)', !(sHtml.match(/\son[a-z]+="/g) || []).length && !/<script(?![^>]*\ssrc=)/.test(sHtml));
+  // (console F10 : mêmes contrôles sur sa page)
+  const cHtml = readFileSync(path.join(root, 'src/console/console.html'), 'utf8'), cJs = readFileSync(path.join(root, 'src/console/console.js'), 'utf8');
+  const cIn = new Set([...cHtml.matchAll(/id="([^"]+)"/g)].map(m => m[1]));
+  const cMiss = [...new Set([...cJs.matchAll(/\$\('#([A-Za-z0-9_-]+)'\)/g)].map(m => m[1]))].filter(i => !cIn.has(i));
+  ok('identifiants de la console F10', cMiss.length === 0, cMiss.join(', '));
+  ok('console F10 : ni gestionnaire ni script en dur (CSP), texte jamais en HTML', !(cHtml.match(/\son[a-z]+="/g) || []).length && !/<script(?![^>]*\ssrc=)/.test(cHtml) && !/innerHTML|outerHTML|insertAdjacentHTML/.test(cJs));
 }
 
 // ---------------------------------------------------------------- 8 : caméras du Studio (projet .bsproj, pistes, parents)
@@ -382,6 +389,20 @@ async function checkShell(m) {
     L().webContents.setBackgroundThrottling(false); L().focus(); L().moveTop(); L().webContents.invalidate();
     await new Promise(r => setTimeout(r, 1500));
     writeFileSync(process.env.BS_SHOT, (await L().webContents.capturePage(undefined, { stayAwake: true })).toPNG());
+  }
+  // (console F10 : la touche l'ouvre dans sa fenêtre, une commande du launcher y répond, F10 la referme)
+  {
+    const C = m.devConsole, gw = m.windows().game;
+    gw.webContents.focus();
+    gw.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F10' }); gw.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F10' });
+    const opened = await wait(() => C.isOpen(), 15000);
+    await C.exec('echo selftest-console');
+    const cw = C.window();
+    const shown = opened && await wait(() => !cw.webContents.isLoading(), 10000) && await new Promise(r => setTimeout(r, 400)).then(() => cw.webContents.executeJavaScript(`[...document.querySelectorAll('#log .x')].some(x => x.textContent === 'selftest-console') && typeof window.bsCon?.exec === 'function' && typeof window.require === 'undefined'`));
+    ok('console F10 : s’ouvre dans sa fenêtre et répond', !!shown);
+    cw.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'F10' }); cw.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'F10' });
+    ok('console F10 : F10 la referme', await wait(() => !C.isOpen(), 5000));
+    ok('console F10 : la page n’a qu’un pont étroit', await gw.webContents.executeJavaScript(`(() => { const b = window.__bsConsole; return !!b && Object.keys(b).sort().join() === 'commands,hello,log,onOpen,onRun,stats,v' && typeof window.require === 'undefined'; })()`));
   }
   const g = m.windows().game;
   g.webContents.executeJavaScript('window.__bsQuit()').catch(() => {});   // (pas d'await : la page meurt avant de répondre)

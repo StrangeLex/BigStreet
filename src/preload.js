@@ -39,3 +39,16 @@ contextBridge.exposeInMainWorld('__bsStudio', {
   stop: meta => ipcRenderer.invoke('bs:rec-stop', meta),
   openFolder: () => ipcRenderer.invoke('bs:rec-folder'),
 });
+
+// Console développeur (F10, fenêtre à part du launcher) : la page peut seulement y écrire des lignes de journal, y publier ses
+// chiffres (images/s, ping, salle…), déclarer ses commandes, et recevoir le texte d'une commande tapée dans la console. Tout est
+// du texte ou du JSON borné, vérifié par le processus principal (console-main.js) ; rien n'est lu sur le disque ni ouvert au réseau.
+contextBridge.exposeInMainWorld('__bsConsole', {
+  v: 1,
+  log: (lvl, text) => { ipcRenderer.send('bs:con-log', String(lvl || 'info').slice(0, 12), String(text ?? '').slice(0, 8000)); },
+  stats: s => { try { const j = JSON.stringify(s); if (j.length < 8000) ipcRenderer.send('bs:con-stats', j); } catch { /* illisible */ } },
+  commands: list => { try { const j = JSON.stringify(list); if (j.length < 60000) ipcRenderer.send('bs:con-cmds', j); } catch { /* illisible */ } },
+  hello: list => { let j = '[]'; try { j = JSON.stringify(list); } catch { /* illisible */ } return ipcRenderer.invoke('bs:con-hello', j.length < 60000 ? j : '[]'); },
+  onRun: cb => { ipcRenderer.removeAllListeners('bs:con-run'); ipcRenderer.on('bs:con-run', (_e, c) => cb({ line: String(c?.line || '') })); },
+  onOpen: cb => { ipcRenderer.removeAllListeners('bs:con-open'); ipcRenderer.on('bs:con-open', (_e, on) => cb(!!on)); },
+});

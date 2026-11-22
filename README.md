@@ -21,6 +21,8 @@ Seule l'application elle-même se met à jour, automatiquement, via les
 - ressources du jeu et suppression de bruit du micro (RNNoise) installables sur le disque
 - **Studio** : enregistrer ce qui se passe autour de soi en jeu (fichiers `.bsrec`, en local), puis le revoir en 3D
   dans une application à part — caméra libre, caméras posées, travellings, export vidéo (`src/studio`, `src/records.js`)
+- **Console développeur (F10)** : fenêtre à part façon console de Source Engine — journal en direct filtrable et copiable,
+  infos en direct (images/s, ping, salle, position…), commandes avec historique et complétion (`src/console-main.js`, `src/console`)
 
 ## Développement
 
