@@ -295,13 +295,16 @@ async function openGame() {
   studio.watchGame(game);   // (un record en cours est referme si la fenetre se ferme ou se recharge)
   devConsole.attachGame(game);   // (F10 : console developpeur, journal des la creation de la fenetre)
 
-  // A chaque lancement du jeu : cache vide (cache HTTP, service worker et ses fichiers, code et shaders compiles) — le jeu
-  // repart toujours de la derniere version publiee. La connexion (localStorage, cookies) et les ressources installees restent.
+  // A chaque lancement du jeu : cache vide (cache HTTP, service worker et ses fichiers) — le jeu repart toujours de la derniere
+  // version publiee. La connexion (localStorage, cookies) et les ressources installees restent.
+  // (27/11, Lex : « tous les menus font freezer le jeu pendant de longues secondes » — les shaders compiles et le code compile ne sont
+  // PLUS vides : la carte graphique recompilait tout a chaque partie, d'ou des gels de plusieurs secondes a chaque premier affichage.
+  // Ils ne peuvent pas servir une ancienne version : le cache des shaders est range par contenu du shader, le code compile est
+  // reverifie contre sa source par V8.)
   try {
     const ses = game.webContents.session;
     await ses.clearCache();
-    await ses.clearStorageData({ storages: ['serviceworkers', 'cachestorage', 'shadercache'] });
-    await ses.clearCodeCaches({}).catch(() => {});
+    await ses.clearStorageData({ storages: ['serviceworkers', 'cachestorage'] });
     log.info('cache du jeu vidé');
   } catch (e) { log.warn('vidage du cache impossible : ' + e); }
 
